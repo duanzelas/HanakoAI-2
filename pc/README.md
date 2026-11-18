@@ -5,13 +5,25 @@
 
 ## 当前状态
 
-已完成骨架，可编译、可运行：
+可以编译、可以运行，已实现：
 
-- 配置模型（5 种 provider：OpenAI 兼容 / OpenAI Responses / Anthropic / Google / The Kirari Network）
-- 输入问题 → 流式输出回答
+- **托盘常驻**：关闭窗口缩到托盘；托盘图标直接画出答案字母（`A` / `AB` / `ABD`），鼠标悬停可看完整答案摘要
+- **全局热键**：`Ctrl+Alt+S` 按固定区域截图作答，`Ctrl+Alt+R` 重新框选
+- **框选一次、位置固定**：选区坐标存进配置，之后每次截图都用同一个矩形，不会再弹框
+- **两条处理链路**：多模态直答（图片直接给视觉模型）、先 OCR 再作答（视觉模型抄文字 → 文本模型解题）
+- **剪贴板取图**：托菜单项或界面按钮，支持剪贴板位图与图片文件
+- **答案浮窗**：右下角浮出字母小球，点击复制完整答案，15 秒后自动消失
 - 配置持久化到 `~/.hanako-pc/config.properties`（明文，仅本机）
 
-还没有做的：截图/OCR、自动模式、悬浮窗、历史记录、Markdown/LaTeX 渲染。
+还没做：历史记录、Markdown/LaTeX 渲染、多显示器下按屏幕分别框选。
+
+## 用法
+
+1. 填好 Base URL / API Key / 视觉模型（多模态或 OCR 能力）与文本模型
+2. 按 `Ctrl+Alt+R`（或点「重新框选」），拖动框住题目区域，松手即固定
+3. 之后按 `Ctrl+Alt+S`，或点托盘菜单「按固定位置截图」，直接出答案
+4. 选择题答案会同时出现在：托盘图标、右下角浮窗、主窗口
+5. 点浮窗即可复制完整答案
 
 ## 目录结构
 
@@ -20,8 +32,16 @@ pc/
 ├── settings.gradle.kts        独立构建入口（含 :llm-core 与 :app）
 ├── build.gradle.kts           插件版本集中声明
 ├── llm-core/                  JVM 模块，直接编译 ../../kirari-llm-core 的源码
-└── app/                       Compose Desktop 应用
-    └── src/main/kotlin/fun/kirari/hanako/pc/Main.kt
+└── app/src/main/kotlin/fun/kirari/hanako/pc/
+    ├── Main.kt                入口、主窗口、答案浮窗
+    ├── AppState.kt            状态与动作（托盘/热键/界面共用同一套）
+    ├── PcSettings.kt          配置模型与持久化（含固定选区）
+    ├── Solver.kt              两条处理链路，复用 kirari-llm-core
+    ├── AnswerParser.kt        从回答里抽 A-H 选项字母
+    ├── Capture.kt             Robot 截图 / 剪贴板取图 / JPEG 编码
+    ├── RegionSelector.kt      全屏框选遮罩（AWT，像素坐标严格对齐）
+    ├── TrayController.kt      AWT 托盘，图标动态绘制字母
+    └── HotkeyController.kt    全局热键（jnativehook）
 ```
 
 ### 为什么 llm-core 不是复制粘贴
@@ -37,12 +57,18 @@ sourceSets.named("main") { java.srcDir("../../kirari-llm-core/src/main/java") }
 好处是四家 provider 的 SSE 解析、工具调用循环、多模态消息拼装都不用重写，
 也不会出现"移动端修了 bug、桌面端还是旧的"这种分叉。Android 端构建完全不受影响。
 
+### 为什么框选遮罩用 AWT 而不是 Compose
+
+`Robot.createScreenCapture` 接受的是物理像素坐标。Compose 窗口的坐标是 dp，
+高 DPI（125% / 150%）下需要来回换算，容易差几个像素导致截歪。
+AWT `JWindow` 直接铺在 `screenBounds` 上，鼠标坐标加屏幕原点就是截图的真实坐标，没有换算误差。
+
 ## 运行
 
 ```bash
 cd pc
-./gradlew :app:run                      # 启动窗口
-./gradlew :app:run --args="--smoke"     # 无界面自检，验证依赖与 JVM 正常
+./gradlew :app:run                      # 启动
+./gradlew :app:run --args="--smoke"     # 无界面自检：JVM、解析器、热键注册、托盘挂载
 ```
 
 首次运行会下载 Compose Desktop 与 skiko（约 200MB），之后走本地缓存。
@@ -51,11 +77,18 @@ cd pc
 
 ```bash
 cd pc
-./gradlew :app:packageMsi     # 生成 MSI 安装包
-./gradlew :app:createDistributable   # 只生成免安装目录
+./gradlew :app:packageMsi            # MSI 安装包
+./gradlew :app:createDistributable   # 免安装目录
 ```
 
 MSI 需要本机有 WiX Toolset（jpackage 的 Windows 打包依赖）。
+
+## 已知限制
+
+- 框选只在主屏（`screenBounds` 取的是虚拟桌面并集，但选区按绝对坐标记录，跨屏拖动可能截不全）
+- 托盘图标只有 64×64，四个字母时字号会缩到 18px，细节靠 tooltip 和浮窗补
+- `jnativehook` 需要注入键盘钩子，个别杀软会拦截；注册失败时界面会显示「注册失败」，功能退化为只用托盘和按钮
+- 配置是明文 Properties，API Key 直接落盘，不要在多用户共用机器上使用
 
 ## 环境要求
 

@@ -1,6 +1,7 @@
 package `fun`.kirari.hanako.pc
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -24,6 +26,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,38 +35,91 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
-import `fun`.kirari.llm.core.LlmClient
-import `fun`.kirari.llm.core.LlmEvent
-import `fun`.kirari.llm.core.ProviderConfig
+import androidx.compose.ui.window.rememberWindowState
 import `fun`.kirari.llm.core.ProviderKind
-import `fun`.kirari.llm.core.StreamRequest
-import kotlinx.coroutines.launch
-import java.io.File
-import java.util.Properties
+import kotlinx.coroutines.delay
 
-/**
- * Hanako PC 的最小可用骨架：
- * 只做「配置模型 → 输入问题 → 流式看回答」这一条链路，
- * 用来验证 kirari-llm-core 能在桌面端原样复用。
- */
 fun main(args: Array<String>) {
-    // 无界面自检：验证 JVM + Compose 依赖在运行时真的加载得起来，
-    // 便于 CI 或命令行冒烟测试（gradle :app:run --args="--smoke"）。
+    // 无界面自检：验证依赖在运行时加载正常，便于命令行冒烟测试
+    // gradlew :app:run --args="--smoke"
     if (args.contains("--smoke")) {
-        println("Hanako PC smoke ok: jvm=${System.getProperty("java.version")}, " +
-            "providers=${ProviderKind.entries.size}")
+        println("jvm      = ${System.getProperty("java.version")}")
+        println("providers= ${ProviderKind.entries.size}")
+        println("parser   = '答案：ABD' -> ${AnswerParser.lettersOf("答案：ABD")}")
+        println("parser   = '选 B'     -> ${AnswerParser.lettersOf("选 B")}")
+        println("parser   = '今天天气' -> '${AnswerParser.lettersOf("今天天气不错")}'")
+
+        val hotkeys = HotkeyController({}, {})
+        println("hotkeys  = ${hotkeys.install()}")
+        hotkeys.uninstall()
+
+        val tray = TrayController({}, {}, {}, {}, {})
+        println("tray     = ${tray.install()}")
+        tray.update("ABD", "答案 ABD")
+        tray.uninstall()
         return
     }
+
     application {
-        Window(onCloseRequest = ::exitApplication, title = "Hanako PC 0.0.20（预览）") {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    App()
+        val scope = rememberCoroutineScope()
+        val state = remember { AppState(scope) }
+
+        val tray = remember {
+            TrayController(
+                onCapture = { state.captureNow() },
+                onSelect = { state.startSelect() },
+                onClipboard = { state.captureClipboard() },
+                onOpenSettings = { state.showMain = true },
+                onExit = { exitApplication() }
+            )
+        }
+        val hotkeys = remember {
+            HotkeyController(
+                onCapture = { state.captureNow() },
+                onSelect = { state.startSelect() }
+            )
+        }
+
+        DisposableEffect(Unit) {
+            tray.install()
+            state.tray = tray
+            state.hotkeyAvailable = hotkeys.install()
+            onDispose {
+                hotkeys.uninstall()
+                tray.uninstall()
+            }
+        }
+
+        MainWindow(state) { exitApplication() }
+        BubbleWindow(state)
+    }
+}
+
+@Composable
+private fun MainWindow(state: AppState, onExit: () -> Unit) {
+    Window(
+        onCloseRequest = {
+            // 有托盘就缩到托盘常驻，没有托盘则直接退出，避免后台死进程
+            if (state.tray?.isAvailable == true) state.showMain = false else onExit()
+        },
+        visible = state.showMain,
+        title = "Hanako PC 0.0.20（预览）",
+        state = rememberWindowState(width = 1000.dp, height = 700.dp)
+    ) {
+        MaterialTheme {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                Row(modifier = Modifier.fillMaxSize()) {
+                    ConfigPane(state)
+                    VerticalLine()
+                    ResultPane(state)
                 }
             }
         }
@@ -71,163 +127,95 @@ fun main(args: Array<String>) {
 }
 
 @Composable
-private fun App() {
-    val saved = remember { PcSettings.load() }
-    var kind by remember { mutableStateOf(saved.kind) }
-    var baseUrl by remember { mutableStateOf(saved.baseUrl) }
-    var apiKey by remember { mutableStateOf(saved.apiKey) }
-    var model by remember { mutableStateOf(saved.model) }
-    var systemPrompt by remember { mutableStateOf(saved.systemPrompt) }
-
-    var question by remember { mutableStateOf("") }
-    var answer by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-
-    val scope = rememberCoroutineScope()
-    val client = remember { LlmClient() }
-
-    // 配置变更即落盘，省掉一个"保存"按钮
-    LaunchedEffect(kind, baseUrl, apiKey, model, systemPrompt) {
-        PcSettings(kind, baseUrl, apiKey, model, systemPrompt).save()
-    }
-
-    fun send() {
-        if (busy || question.isBlank() || model.isBlank()) return
-        val prompt = question
-        busy = true
-        answer = ""
-        error = null
-        scope.launch {
-            try {
-                val request = StreamRequest(
-                    provider = ProviderConfig(kind = kind, baseUrl = baseUrl.trim(), apiKey = apiKey.trim()),
-                    model = model.trim(),
-                    systemPrompt = systemPrompt,
-                    userPrompt = prompt,
-                    firstDeltaTimeoutMillis = 60_000,
-                    trustAllHttpsCertificates = false
-                )
-                client.stream(request).collect { event ->
-                    when (event) {
-                        is LlmEvent.TextDelta -> answer += event.text
-                        is LlmEvent.ToolCall -> answer += "\n[tool] ${event.name} ${event.arguments}\n"
-                        LlmEvent.Done -> Unit
-                    }
-                }
-            } catch (t: Throwable) {
-                error = t.message ?: t.toString()
-            } finally {
-                busy = false
-            }
+private fun BubbleWindow(state: AppState) {
+    // 托盘旁边的答案浮窗：只显示字母，点一下把完整答案复制走
+    LaunchedEffect(state.bubbleVisible, state.answer) {
+        if (state.bubbleVisible) {
+            delay(15_000)
+            state.bubbleVisible = false
         }
     }
 
-    Row(modifier = Modifier.fillMaxSize()) {
-        ConfigPane(
-            kind = kind,
-            onKindChange = { kind = it },
-            baseUrl = baseUrl,
-            onBaseUrlChange = { baseUrl = it },
-            apiKey = apiKey,
-            onApiKeyChange = { apiKey = it },
-            model = model,
-            onModelChange = { model = it },
-            systemPrompt = systemPrompt,
-            onSystemPromptChange = { systemPrompt = it }
-        )
-
-        Box(
-            modifier = Modifier
-                .width(1.dp)
-                .fillMaxHeight()
-                .background(MaterialTheme.colorScheme.outlineVariant)
-        )
-
-        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            Text(
-                text = if (busy) "正在请求 ${kindLabel(kind)} / $model …" else "就绪",
-                style = MaterialTheme.typography.labelMedium
-            )
-            Spacer(Modifier.height(8.dp))
-
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(12.dp)
-            ) {
-                SelectionContainer {
+    Window(
+        onCloseRequest = { state.bubbleVisible = false },
+        visible = state.bubbleVisible,
+        title = "Hanako",
+        state = rememberWindowState(
+            position = WindowPosition(Alignment.BottomEnd),
+            size = DpSize(240.dp, 116.dp)
+        ),
+        undecorated = true,
+        transparent = true,
+        resizable = false,
+        alwaysOnTop = true
+    ) {
+        MaterialTheme {
+            Box(modifier = Modifier.fillMaxSize().padding(10.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .clickable {
+                            state.copyAnswer()
+                            state.bubbleVisible = false
+                        }
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
                     Text(
-                        text = when {
-                            answer.isNotEmpty() -> answer
-                            error != null -> "请求失败：$error"
-                            else -> "在下方输入问题，回车或点「发送」。"
-                        },
-                        fontFamily = FontFamily.Default,
-                        fontSize = 14.sp
+                        text = state.letters.ifBlank { "✓" },
+                        fontSize = if (state.letters.length > 2) 32.sp else 40.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        text = "点击复制答案",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 }
             }
-
-            Spacer(Modifier.height(12.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = question,
-                    onValueChange = { question = it },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("问题") },
-                    maxLines = 3
-                )
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = { send() }, enabled = !busy) {
-                    Text(if (busy) "…" else "发送")
-                }
-            }
         }
     }
 }
 
 @Composable
-private fun ConfigPane(
-    kind: ProviderKind,
-    onKindChange: (ProviderKind) -> Unit,
-    baseUrl: String,
-    onBaseUrlChange: (String) -> Unit,
-    apiKey: String,
-    onApiKeyChange: (String) -> Unit,
-    model: String,
-    onModelChange: (String) -> Unit,
-    systemPrompt: String,
-    onSystemPromptChange: (String) -> Unit
-) {
+private fun VerticalLine() {
+    Box(
+        modifier = Modifier
+            .width(1.dp)
+            .fillMaxHeight()
+            .background(MaterialTheme.colorScheme.outlineVariant)
+    )
+}
+
+@Composable
+private fun ConfigPane(state: AppState) {
+    val settings = state.settings
     var expanded by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
-            .width(340.dp)
+            .width(400.dp)
             .fillMaxHeight()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text("模型配置", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "配置保存在 ~/.hanako-pc/config.properties，明文存储，仅本机使用。",
-            style = MaterialTheme.typography.bodySmall
-        )
 
         Box {
             OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-                Text(kindLabel(kind))
+                Text(kindLabel(settings.kind))
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                ProviderKind.entries.forEach { k ->
+                ProviderKind.entries.forEach { kind ->
                     DropdownMenuItem(
-                        text = { Text(kindLabel(k)) },
+                        text = { Text(kindLabel(kind)) },
                         onClick = {
-                            onKindChange(k)
+                            state.updateSettings { it.copy(kind = kind) }
                             expanded = false
                         }
                     )
@@ -236,36 +224,154 @@ private fun ConfigPane(
         }
 
         OutlinedTextField(
-            value = baseUrl,
-            onValueChange = onBaseUrlChange,
+            value = settings.baseUrl,
+            onValueChange = { value -> state.updateSettings { it.copy(baseUrl = value) } },
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Base URL") },
-            singleLine = true,
-            placeholder = { Text("https://api.openai.com/v1") }
+            singleLine = true
         )
         OutlinedTextField(
-            value = apiKey,
-            onValueChange = onApiKeyChange,
+            value = settings.apiKey,
+            onValueChange = { value -> state.updateSettings { it.copy(apiKey = value) } },
             modifier = Modifier.fillMaxWidth(),
             label = { Text("API Key") },
             singleLine = true
         )
-        OutlinedTextField(
-            value = model,
-            onValueChange = onModelChange,
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("模型") },
-            singleLine = true,
-            placeholder = { Text("gpt-4o-mini") }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = settings.visionModel,
+                onValueChange = { value -> state.updateSettings { it.copy(visionModel = value) } },
+                modifier = Modifier.weight(1f),
+                label = { Text("视觉模型") },
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = settings.textModel,
+                onValueChange = { value -> state.updateSettings { it.copy(textModel = value) } },
+                modifier = Modifier.weight(1f),
+                label = { Text("文本模型") },
+                singleLine = true
+            )
+        }
+
+        Text("处理方式", style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { state.updateSettings { it.copy(route = SolveRoute.MULTIMODAL_DIRECT) } },
+                enabled = settings.route != SolveRoute.MULTIMODAL_DIRECT
+            ) { Text("多模态直答") }
+            Button(
+                onClick = { state.updateSettings { it.copy(route = SolveRoute.OCR_THEN_LLM) } },
+                enabled = settings.route != SolveRoute.OCR_THEN_LLM
+            ) { Text("先 OCR 再作答") }
+        }
+
+        Text("截图区域", style = MaterialTheme.typography.titleSmall)
+        val region = settings.region
+        Text(
+            text = when {
+                region == null -> "未框选。按 Ctrl+Alt+R 或点下面的按钮框选一次。"
+                else -> "${region.width} × ${region.height} @ (${region.x}, ${region.y})" +
+                    " —— 位置固定，之后每次截图都取这里"
+            },
+            style = MaterialTheme.typography.bodySmall
         )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { state.startSelect() }) { Text("重新框选") }
+            Button(onClick = { state.captureNow() }, enabled = !state.busy) { Text("立即作答") }
+            OutlinedButton(onClick = { state.captureClipboard() }, enabled = !state.busy) {
+                Text("读剪贴板")
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+        Text("快捷键", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "Ctrl+Alt+S 按固定区域截图作答\nCtrl+Alt+R 重新框选区域",
+            style = MaterialTheme.typography.bodySmall
+        )
+
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = buildString {
+                append("托盘：")
+                append(
+                    if (state.tray?.isAvailable == true) "已启用，图标会显示答案字母"
+                    else "当前系统不支持托盘"
+                )
+                append("\n全局热键：")
+                append(if (state.hotkeyAvailable) "已注册" else "注册失败（可能被杀毒软件占用）")
+                append("\n配置：~/.hanako-pc/config.properties")
+            },
+            style = MaterialTheme.typography.bodySmall
+        )
+
+        Spacer(Modifier.height(4.dp))
         OutlinedTextField(
-            value = systemPrompt,
-            onValueChange = onSystemPromptChange,
+            value = settings.systemPrompt,
+            onValueChange = { value -> state.updateSettings { it.copy(systemPrompt = value) } },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("System Prompt（可选）") },
+            label = { Text("System Prompt") },
             minLines = 3,
             maxLines = 6
         )
+    }
+}
+
+@Composable
+private fun ResultPane(state: AppState) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(state.status, style = MaterialTheme.typography.labelLarge)
+            Spacer(Modifier.width(12.dp))
+            if (state.letters.isNotBlank()) {
+                Text(
+                    state.letters,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(12.dp)
+        ) {
+            SelectionContainer {
+                Text(
+                    text = when {
+                        state.answer.isNotBlank() -> state.answer
+                        state.busy -> "处理中…"
+                        else -> "用 Ctrl+Alt+S 按固定区域截图，或点左侧「立即作答」「读剪贴板」。\n" +
+                            "答案会同时出现在托盘图标和右下角浮窗上。"
+                    },
+                    fontSize = 14.sp
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { state.copyAnswer() }, enabled = state.answer.isNotBlank()) {
+                Text("复制答案")
+            }
+            OutlinedButton(onClick = { state.bubbleVisible = !state.bubbleVisible }) {
+                Text(if (state.bubbleVisible) "隐藏浮窗" else "显示浮窗")
+            }
+            val ocr = state.ocrText
+            if (!ocr.isNullOrBlank()) {
+                Text(
+                    "OCR 已识别 ${ocr.length} 字",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.align(Alignment.CenterVertically)
+                )
+            }
+        }
     }
 }
 
@@ -275,48 +381,4 @@ private fun kindLabel(kind: ProviderKind): String = when (kind) {
     ProviderKind.ANTHROPIC -> "Anthropic"
     ProviderKind.GOOGLE -> "Google Gemini"
     ProviderKind.KIRARI_NETWORK -> "The Kirari Network"
-}
-
-/** 极简配置持久化，避免为此引入 DataStore。 */
-private data class PcSettings(
-    val kind: ProviderKind = ProviderKind.OPENAI_COMPATIBLE,
-    val baseUrl: String = "https://api.openai.com/v1",
-    val apiKey: String = "",
-    val model: String = "gpt-4o-mini",
-    val systemPrompt: String = ""
-) {
-    fun save() {
-        runCatching {
-            val file = configFile()
-            file.parentFile?.mkdirs()
-            val props = Properties()
-            props["kind"] = kind.name
-            props["baseUrl"] = baseUrl
-            props["apiKey"] = apiKey
-            props["model"] = model
-            props["systemPrompt"] = systemPrompt
-            file.outputStream().use { props.store(it, "Hanako PC") }
-        }
-    }
-
-    companion object {
-        fun load(): PcSettings = runCatching {
-            val file = configFile()
-            if (!file.exists()) return PcSettings()
-            val props = Properties()
-            file.inputStream().use { props.load(it) }
-            PcSettings(
-                kind = props.getProperty("kind")
-                    ?.let { runCatching { ProviderKind.valueOf(it) }.getOrNull() }
-                    ?: ProviderKind.OPENAI_COMPATIBLE,
-                baseUrl = props.getProperty("baseUrl") ?: "https://api.openai.com/v1",
-                apiKey = props.getProperty("apiKey").orEmpty(),
-                model = props.getProperty("model") ?: "gpt-4o-mini",
-                systemPrompt = props.getProperty("systemPrompt").orEmpty()
-            )
-        }.getOrDefault(PcSettings())
-
-        private fun configFile(): File =
-            File(System.getProperty("user.home"), ".hanako-pc/config.properties")
-    }
 }

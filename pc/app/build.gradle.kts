@@ -16,6 +16,8 @@ dependencies {
     implementation(compose.material3)
     // Compose Desktop 的主线程调度器（rememberCoroutineScope 依赖它）
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
+    // 全局热键（Compose Desktop 没有内置的全局快捷键）
+    implementation("com.github.kwhat:jnativehook:2.2.2")
 }
 
 compose.desktop {
