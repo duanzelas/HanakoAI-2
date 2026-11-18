@@ -166,6 +166,17 @@ Hanako 把截图、识题、解题、复制/填写这几个步骤压缩到尽可
 - JDK 11
 - Android 7.0 及以上设备或模拟器（项目 `minSdk = 24`）
 
+### PC 端（预览）
+
+桌面端是独立构建，放在 `pc/`，不参与 APK 构建。目前已实现模型配置与流式对话，见 `pc/README.md`。
+
+```bash
+cd pc
+./gradlew :app:run
+```
+
+它直接复用 `kirari-llm-core` 的源码（该模块无任何 `android.*` 依赖），四家 provider 的适配逻辑两端共用同一份代码。
+
 构建调试包：
 
 ```bash
