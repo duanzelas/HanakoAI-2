@@ -261,7 +261,7 @@ fun MoreSettingsScreen(
 }
 
 /** 项目仓库地址。改仓库时只改这一处。 */
-private const val GITHUB_REPO_URL = "https://github.com/duanzelas/HanakoAI-2"
+private const val GITHUB_REPO_URL = "https://github.com/duanzelas/HanakoAI-EX"
 
 /**
  * 仓库入口。
