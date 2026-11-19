@@ -77,11 +77,24 @@ cd pc
 
 ```bash
 cd pc
-./gradlew :app:packageMsi            # MSI 安装包
-./gradlew :app:createDistributable   # 免安装目录
+./gradlew :app:createDistributable       # 免安装 app-image（不需要 WiX）
+./gradlew :app:packageMsi -PwithMsi      # MSI 安装包（需要 WiX）
 ```
 
-MSI 需要本机有 WiX Toolset（jpackage 的 Windows 打包依赖）。
+产物：
+
+| 路径 | 大小 | 说明 |
+|---|---|---|
+| `app/build/compose/binaries/main/app/HanakoPC/HanakoPC.exe` | 整目录 115MB | 双击即用，内含精简 JRE，目标机不用装 Java |
+| `app/build/compose/binaries/main/msi/HanakoPC-0.0.20.msi` | 58MB | 安装包，装完有开始菜单项 |
+
+两个打包坑（都已在构建脚本里处理）：
+
+- **jpackage 在中文 Windows 上按 GBK 解码** `packageName` / `description` / `vendor`，字段里出现中文会抛
+  `MalformedInputException: Input length = 1`，整个打包失败。所以 `nativeDistributions` 里这几个字段必须纯英文。
+- **WiX 需要预置在 `~/.gradle/compose-jb/wix311.zip`**。Compose 插件用 Java 的 SSLContext 下载它，
+  本机代理做 TLS 中间人时证书链校验失败；用系统 `curl`（走系统证书库）分片下载再放进去即可。
+  本机就是这么补的：GitHub Release 单连接只有 16KB/s，改成 20 段并行 Range 下载，2 分钟拉完 34.6MB。
 
 ## 已知限制
 
