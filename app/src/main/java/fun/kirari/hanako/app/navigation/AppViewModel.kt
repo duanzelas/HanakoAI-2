@@ -26,6 +26,7 @@ import `fun`.kirari.hanako.core.data.AssistantPreset
 import `fun`.kirari.hanako.core.data.AutomationSettings
 import `fun`.kirari.hanako.core.data.ModelPurpose
 import `fun`.kirari.hanako.core.data.ModelProviderConfig
+import `fun`.kirari.hanako.core.data.ProviderPreset
 import `fun`.kirari.hanako.core.data.ModelSelection
 import `fun`.kirari.hanako.core.model.ProcessingResult
 import `fun`.kirari.hanako.core.model.ProcessingRoute
@@ -114,8 +115,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         settingsEditorController.updateProvider(provider)
     }
 
-    fun addProvider() {
-        settingsEditorController.addProvider()
+    fun addProvider(preset: ProviderPreset = ProviderPreset.CUSTOM) {
+        settingsEditorController.addProvider(preset)
     }
 
     fun selectProvider(providerId: String) {

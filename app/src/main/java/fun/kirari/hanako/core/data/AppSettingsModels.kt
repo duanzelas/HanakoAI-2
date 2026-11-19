@@ -197,7 +197,7 @@ data class WebSearchSettings(
 @Serializable
 data class AppSettings(
     val schemaVersion: Int = StorageSchema.CURRENT_APP_DATA_VERSION,
-    val providers: List<ModelProviderConfig> = listOf(defaultProvider()),
+    val providers: List<ModelProviderConfig> = listOf(defaultProvider(), deepSeekProvider()),
     val selectedProviderId: String? = providers.firstOrNull()?.id,
     val assistants: List<AssistantPreset> = defaultAssistants(),
     val selectedAssistantId: String? = assistants.firstOrNull()?.id,
@@ -218,6 +218,28 @@ data class AppSettings(
 )
 
 fun defaultProvider(): ModelProviderConfig = ModelProviderConfig()
+
+/** DeepSeek 官方 API 的默认模型：V4.1-Flash 的 model id 是 deepseek-flash。 */
+const val DEEPSEEK_DEFAULT_MODEL = "deepseek-flash"
+
+/**
+ * DeepSeek 预设：协议上就是 OpenAI Compatible，只是把 baseUrl 和默认模型换成官方的。
+ * V4.1-Flash 原生支持视觉，所以 chat / vision / ocr 三个用途共用一个模型即可。
+ */
+fun deepSeekProvider(): ModelProviderConfig = ModelProviderConfig(
+    name = "DeepSeek",
+    kind = ProviderKind.OPENAI_COMPATIBLE,
+    baseUrl = "https://api.deepseek.com/v1",
+    chatModel = DEEPSEEK_DEFAULT_MODEL,
+    visionModel = DEEPSEEK_DEFAULT_MODEL,
+    ocrModel = DEEPSEEK_DEFAULT_MODEL
+)
+
+/** 新增提供方时可选的预设。 */
+enum class ProviderPreset(val label: String) {
+    CUSTOM("自定义提供方"),
+    DEEPSEEK("DeepSeek")
+}
 
 fun kirariProvider(settings: KirariSettings = KirariSettings()): ModelProviderConfig = ModelProviderConfig(
     id = KIRARI_PROVIDER_ID,
