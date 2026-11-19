@@ -6,7 +6,7 @@ Android 悬浮窗 AI 客户端，把「截屏 → 识题 → 解题 → 复制/�
 > **HanakoAI-EX** 是 [zyf2007/HanakoAI](https://github.com/zyf2007/HanakoAI) 的衍生分支，
 > 在上游基础上做了较多面向实际刷题场景的改动，详见 [与上游的差异](#与上游的差异)。
 
-[[下载 v0.0.26](https://github.com/duanzelas/HanakoAI-EX/releases/tag/v0.0.26)] [[更新日志](https://github.com/duanzelas/HanakoAI-EX/releases)] [[上游项目](https://github.com/zyf2007/HanakoAI)]
+[[下载 v0.0.28](https://github.com/duanzelas/HanakoAI-EX/releases/tag/v0.0.28)] [[更新日志](https://github.com/duanzelas/HanakoAI-EX/releases)] [[上游项目](https://github.com/zyf2007/HanakoAI)]
 
 ---
 
