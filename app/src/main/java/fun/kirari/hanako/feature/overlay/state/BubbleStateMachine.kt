@@ -171,6 +171,26 @@ class BubbleStateMachine {
             current is BubbleState.MenuExpanded && event is BubbleEvent.ErrorOccurred ->
                 BubbleState.Error(event.message)
 
+            // Recording 录音中的转换
+            (current is BubbleState.Idle || current is BubbleState.ShowingLetters ||
+                current is BubbleState.Copied || current is BubbleState.Error) &&
+                event is BubbleEvent.StartRecording ->
+                BubbleState.Recording(elapsedSeconds = 0, microphone = event.microphone)
+
+            current is BubbleState.Recording && event is BubbleEvent.RecordingTick ->
+                current.copy(elapsedSeconds = event.elapsedSeconds)
+
+            current is BubbleState.Recording && event is BubbleEvent.StopRecording ->
+                BubbleState.Processing
+
+            current is BubbleState.Recording &&
+                (event is BubbleEvent.CancelRecording || event is BubbleEvent.LongPress ||
+                    event is BubbleEvent.DoubleTap) ->
+                BubbleState.Idle
+
+            current is BubbleState.Recording && event is BubbleEvent.ErrorOccurred ->
+                BubbleState.Error(event.message)
+
             // 无效转换，保持当前状态
             else -> {
                 AppDebugLogStore.i(

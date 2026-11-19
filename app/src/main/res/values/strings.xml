@@ -9,4 +9,8 @@
     <string name="overlay_automation_answer">答案：%1$s</string>
     <string name="overlay_accessibility_label">Hanako 悬浮层增强</string>
     <string name="overlay_accessibility_description">开启后，悬浮球改用无障碍悬浮层绘制，在微信收款码、银行、支付密码等会隐藏普通悬浮窗的页面上仍然可见。本服务不读取、不监听、不操作任何界面内容。</string>
+    <string name="audio_capture_notification_title">Hanako 正在录音</string>
+    <string name="audio_capture_notification_text">再次点击悬浮球结束录音并作答</string>
+    <string name="audio_capture_channel_name">录音状态</string>
+    <string name="audio_capture_channel_description">语音模式录音期间显示的常驻通知</string>
 </resources>

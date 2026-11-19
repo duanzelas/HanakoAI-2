@@ -104,6 +104,47 @@ internal class AutoProcessingController(
         }
     }
 
+    /**
+     * 语音自动模式：录音 + 截图直接走自动流程，**不弹面板**。
+     *
+     * 和普通截图自动模式共用同一条自动化链路（模型自己决定「复制到剪贴板」还是
+     * 「在悬浮球上显示字母」），区别只是这次多带了语音转写。
+     */
+    fun processVoiceAutomation(
+        bitmaps: List<Bitmap>,
+        audioTranscript: String?,
+        audioDurationMillis: Long,
+        notice: String?
+    ) {
+        AppDebugLogStore.i(
+            tag,
+            "processVoiceAutomation start bitmapCount=${bitmaps.size} " +
+                "transcriptLength=${audioTranscript?.length ?: 0} notice=$notice"
+        )
+        activeJob?.cancel()
+        val job = scope.launch {
+            uiState.update {
+                it.copy(
+                    liveOcrText = "",
+                    liveAnswerText = "",
+                    result = null,
+                    error = notice,
+                    working = true,
+                    sheetVisible = false,
+                    autoRunState = AutoRunState.RUNNING,
+                    autoCopiedLabel = null,
+                    pendingVibrationLetters = null
+                )
+            }
+            bubbleStateMachine.dispatch(BubbleEvent.StartProcessing)
+            processBitmapsNow(bitmaps, audioTranscript, audioDurationMillis, notice)
+        }
+        activeJob = job
+        job.invokeOnCompletion {
+            if (activeJob === job) activeJob = null
+        }
+    }
+
     fun cancelActiveProcessing() {
         AppDebugLogStore.i(tag, "cancelActiveProcessing")
         activeJob?.cancel()
@@ -128,12 +169,23 @@ internal class AutoProcessingController(
         }
     }
 
-    private suspend fun processBitmapsNow(bitmaps: List<Bitmap>) {
+    private suspend fun processBitmapsNow(
+        bitmaps: List<Bitmap>,
+        audioTranscript: String? = null,
+        audioDurationMillis: Long = 0L,
+        notice: String? = null
+    ) {
         val state = uiState.value
         val firstBitmap = bitmaps.firstOrNull() ?: return
-        AppDebugLogStore.i(tag, "processBitmaps start route=${state.settings.processingRoute} bitmapCount=${bitmaps.size}")
+        AppDebugLogStore.i(tag, "processBitmaps start route=${state.effectiveRoute} bitmapCount=${bitmaps.size}")
         val handle = runCatching {
-            solveOperations.startAutomation(state.settings, bitmaps)
+            solveOperations.startAutomation(
+                settings = state.effectiveSettings(),
+                bitmaps = bitmaps,
+                audioTranscript = audioTranscript,
+                audioDurationMillis = audioDurationMillis,
+                notice = notice
+            )
         }.getOrElse { error ->
             uiState.update { it.copy(working = false, autoRunState = AutoRunState.IDLE, error = error.message) }
             bubbleStateMachine.forceState(BubbleState.Idle)

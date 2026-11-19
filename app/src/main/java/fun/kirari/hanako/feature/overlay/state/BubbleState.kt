@@ -44,6 +44,13 @@ sealed class BubbleState {
         val captureCount: Int = 0
     ) : BubbleState()
 
+    /** 语音模式录音中：红色胶囊显示计时，再点一次结束并作答 */
+    data class Recording(
+        val elapsedSeconds: Int = 0,
+        /** true = 麦克风录音，false = 系统内录 */
+        val microphone: Boolean = false
+    ) : BubbleState()
+
     /** 菜单展开状态（长按触发，记住之前的状态以便关闭后恢复） */
     data class MenuExpanded(
         val previousState: BubbleState,
@@ -101,6 +108,18 @@ sealed class BubbleEvent {
 
     /** 取消处理事件 */
     data object CancelProcessing : BubbleEvent()
+
+    /** 开始录音（语音模式：单击进入） */
+    data class StartRecording(val microphone: Boolean = false) : BubbleEvent()
+
+    /** 录音计时刷新（每 500ms 一次，只改计时不影响其它状态） */
+    data class RecordingTick(val elapsedSeconds: Int) : BubbleEvent()
+
+    /** 结束录音 → 转写 → 截图 → 作答 */
+    data object StopRecording : BubbleEvent()
+
+    /** 取消录音，丢弃已录内容 */
+    data object CancelRecording : BubbleEvent()
 
     /** 重置事件 */
     data object Reset : BubbleEvent()

@@ -41,19 +41,35 @@ internal class AutomationAgentNode(
         val models = input.models
         val provider = when (models.route) {
             ProcessingRoute.OCR_THEN_LLM -> requireNotNull(models.textProvider)
-            ProcessingRoute.MULTIMODAL_DIRECT -> requireNotNull(models.visionProvider)
+            ProcessingRoute.MULTIMODAL_DIRECT,
+            ProcessingRoute.AUDIO_AND_SCREEN -> requireNotNull(models.visionProvider)
         }
         val model = when (models.route) {
             ProcessingRoute.OCR_THEN_LLM -> models.textModel
-            ProcessingRoute.MULTIMODAL_DIRECT -> models.visionModel
+            ProcessingRoute.MULTIMODAL_DIRECT,
+            ProcessingRoute.AUDIO_AND_SCREEN -> models.visionModel
         }
         val assistantPrompt = when (models.route) {
             ProcessingRoute.OCR_THEN_LLM -> models.assistant.textPrompt
-            ProcessingRoute.MULTIMODAL_DIRECT -> models.assistant.visionPrompt
+            ProcessingRoute.MULTIMODAL_DIRECT,
+            ProcessingRoute.AUDIO_AND_SCREEN -> models.assistant.visionPrompt
         }
-        val basePrompt = input.ocrOutput?.let {
-            "以下是 OCR 结果，请先输出简短、清晰的思考过程，再通过一次工具调用给出自动模式动作：\n${it.text}"
-        } ?: "请根据整张屏幕截图先输出简短、清晰的思考过程，再通过一次工具调用给出自动模式动作。"
+        val transcript = input.audioTranscript?.trim().orEmpty()
+        val basePrompt = when {
+            // 语音自动模式：录音转写 + 截图一起给，动作仍然走工具调用（不弹面板）
+            transcript.isNotBlank() -> buildString {
+                append("以下是这段画面同时录到的语音转写文本（英文，可能存在个别识别错误）：\n")
+                append(transcript)
+                append("\n\n")
+                append("请把它和截图结合起来理解题目：只在语音里出现的条件、提问、数字都算已知信息，")
+                append("若两者矛盾以画面中可见内容为准。先输出简短、清晰的思考过程，")
+                append("再通过一次工具调用给出自动模式动作。")
+            }
+            input.ocrOutput != null ->
+                "以下是 OCR 结果，请先输出简短、清晰的思考过程，再通过一次工具调用给出自动模式动作：\n${input.ocrOutput.text}"
+            else ->
+                "请根据整张屏幕截图先输出简短、清晰的思考过程，再通过一次工具调用给出自动模式动作。"
+        }
         val imagesBase64 = if (input.ocrOutput == null) {
             input.capturedImages.bitmaps.map { it.toBase64Jpeg() }
         } else {

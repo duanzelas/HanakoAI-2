@@ -21,3 +21,6 @@ keystore.properties
 /release.jks
 # 开发计划文档仅供本地协作，不需要同步
 docs/*.md
+
+# 本地协作/记忆目录，不同步
+.workbuddy/

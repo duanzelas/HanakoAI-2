@@ -53,18 +53,21 @@ internal class ConversationWorkflow(
                 require(models.textModel.isNotBlank()) { "请先在模型设置中配置文本模型" }
                 requireNotNull(models.textProvider) { "请先在模型设置中配置文本模型" }
             }
-            ProcessingRoute.MULTIMODAL_DIRECT -> {
+            ProcessingRoute.MULTIMODAL_DIRECT,
+            ProcessingRoute.AUDIO_AND_SCREEN -> {
                 pipeline.validateVisionModels(models)
                 requireNotNull(models.visionProvider)
             }
         }
         val model = when (existingResult.route) {
             ProcessingRoute.OCR_THEN_LLM -> models.textModel
-            ProcessingRoute.MULTIMODAL_DIRECT -> models.visionModel
+            ProcessingRoute.MULTIMODAL_DIRECT,
+            ProcessingRoute.AUDIO_AND_SCREEN -> models.visionModel
         }
         val assistantPrompt = when (existingResult.route) {
             ProcessingRoute.OCR_THEN_LLM -> models.assistant.textPrompt
-            ProcessingRoute.MULTIMODAL_DIRECT -> models.assistant.visionPrompt
+            ProcessingRoute.MULTIMODAL_DIRECT,
+            ProcessingRoute.AUDIO_AND_SCREEN -> models.assistant.visionPrompt
         }
         val (prompt, retainedTurns, retainedVersions) = when (intent) {
             is ConversationIntent.NewTurn -> Triple(
@@ -147,8 +150,13 @@ internal class ConversationWorkflow(
                 "以下是用户通过悬浮窗提交题目的 OCR 结果，请完成任务：\n$it"
             } ?: "用户通过悬浮窗提交了一道题目。"
             ProcessingRoute.MULTIMODAL_DIRECT -> "请直接基于图片内容完成任务。"
+            ProcessingRoute.AUDIO_AND_SCREEN -> result.audioTranscript.takeIf(String::isNotBlank)?.let {
+                "以下是这段画面的语音转写文本（英文），请结合截图完成任务：\n$it"
+            } ?: "请直接基于图片内容完成任务。"
         }
-        val images = if (result.route == ProcessingRoute.MULTIMODAL_DIRECT) {
+        val images = if (result.route == ProcessingRoute.MULTIMODAL_DIRECT ||
+            result.route == ProcessingRoute.AUDIO_AND_SCREEN
+        ) {
             result.loadHistoryBitmaps().map { it.toBase64Jpeg() }
         } else {
             emptyList()

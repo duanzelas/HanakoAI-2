@@ -34,6 +34,7 @@ import `fun`.kirari.hanako.core.data.ScreenCaptureMethod
 import `fun`.kirari.hanako.core.data.SettingsRepository
 import `fun`.kirari.hanako.core.debug.AppDebugLogStore
 import `fun`.kirari.hanako.core.data.KirariSettings
+import `fun`.kirari.hanako.core.data.TranscriptionSettings
 import `fun`.kirari.hanako.core.data.WebSearchSettings
 import `fun`.kirari.hanako.platform.capture.ocr.LocalOcrManager
 import `fun`.kirari.hanako.feature.history.presentation.HistoryWorkflowController
@@ -207,6 +208,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateWebSearchSettings(transform: (WebSearchSettings) -> WebSearchSettings) {
         settingsEditorController.updateWebSearchSettings(transform)
+    }
+
+    fun updateTranscriptionSettings(transform: (TranscriptionSettings) -> TranscriptionSettings) {
+        settingsEditorController.updateTranscriptionSettings(transform)
     }
 
     fun queryWebSearchQuota() {

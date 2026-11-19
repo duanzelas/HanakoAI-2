@@ -16,6 +16,7 @@ import `fun`.kirari.hanako.core.data.deepSeekProvider
 import `fun`.kirari.hanako.core.model.ProcessingRoute
 import `fun`.kirari.hanako.core.data.ScreenCaptureMethod
 import `fun`.kirari.hanako.core.data.SettingsRepository
+import `fun`.kirari.hanako.core.data.TranscriptionSettings
 import `fun`.kirari.hanako.core.data.WebSearchSettings
 import `fun`.kirari.hanako.core.data.availableProviders
 import `fun`.kirari.hanako.core.data.creatableProviderKinds
@@ -207,6 +208,14 @@ internal class SettingsEditorController(
                 val updatedSettings = current.copy(kirari = transform(current.kirari))
                 AppDebugLogStore.i(tag, "updateKirariSettings serverUrl=${updatedSettings.kirari.serverUrl}")
                 updatedSettings
+            }
+        }
+    }
+
+    fun updateTranscriptionSettings(transform: (TranscriptionSettings) -> TranscriptionSettings) {
+        scope.launch {
+            repository.update { current ->
+                current.copy(transcription = transform(current.transcription))
             }
         }
     }

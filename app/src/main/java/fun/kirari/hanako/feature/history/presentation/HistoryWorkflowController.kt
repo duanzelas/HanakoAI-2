@@ -162,7 +162,8 @@ internal fun buildHistoryDetailStates(
     return state.results.associate { result ->
         val purpose = when (result.route) {
             ProcessingRoute.OCR_THEN_LLM -> ModelPurpose.TEXT
-            ProcessingRoute.MULTIMODAL_DIRECT -> ModelPurpose.VISION
+            ProcessingRoute.MULTIMODAL_DIRECT,
+            ProcessingRoute.AUDIO_AND_SCREEN -> ModelPurpose.VISION
         }
         val selection = modelOverrides[result.id] ?: settings.modelSelectionFor(purpose)
         val operation = when (val task = state.activeTasks[result.id]) {

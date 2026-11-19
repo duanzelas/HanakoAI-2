@@ -7,6 +7,7 @@ import `fun`.kirari.hanako.feature.overlay.state.OverlayUiState
 
 import `fun`.kirari.hanako.feature.overlay.state.BubbleEvent
 import `fun`.kirari.hanako.feature.overlay.state.BubbleMenuItem
+import `fun`.kirari.hanako.feature.overlay.state.BubbleSlot
 import `fun`.kirari.hanako.feature.overlay.state.BubbleState
 import `fun`.kirari.hanako.feature.overlay.state.BubbleStateMachine
 import `fun`.kirari.hanako.core.debug.AppDebugLogStore
@@ -25,7 +26,13 @@ internal class OverlayInteractionController(
     private val isBubbleMenuEnabled: () -> Boolean,
     private val toggleProcessingRoute: () -> Unit,
     private val toggleWebSearch: () -> Unit,
-    private val openSettings: () -> Unit
+    private val openSettings: () -> Unit,
+    /** 语音模式：开始录音（true = 麦克风，false = 系统内录；slot = 哪颗球发起的） */
+    private val startVoiceRecording: (Boolean, BubbleSlot) -> Unit,
+    private val stopVoiceRecording: () -> Unit,
+    private val cancelVoiceRecording: () -> Unit,
+    /** 当前工作模式是否为「语音+画面」 */
+    private val isVoiceRoute: () -> Boolean
 ) {
     private val tag = "HanakoOverlayInteraction"
 
@@ -59,13 +66,22 @@ internal class OverlayInteractionController(
         }
     }
 
-    fun handleSingleTap() {
+    fun handleSingleTap(slot: BubbleSlot = BubbleSlot.PRIMARY) {
         val currentState = bubbleStateMachine.currentState
-        AppDebugLogStore.i(tag, "handleSingleTap state=${currentState::class.simpleName}")
+        AppDebugLogStore.i(tag, "handleSingleTap slot=$slot state=${currentState::class.simpleName}")
+
+        if (slot == BubbleSlot.SECONDARY) {
+            handleSecondarySingleTap(currentState)
+            return
+        }
 
         when (currentState) {
             is BubbleState.MenuExpanded -> {
                 bubbleStateMachine.dispatch(BubbleEvent.CloseMenu)
+            }
+            is BubbleState.Recording -> {
+                // 两段式：第一次点击开始录，第二次点击结束并作答
+                stopVoiceRecording()
             }
             is BubbleState.MultiPageCapture -> {
                 capturePage()
@@ -83,16 +99,49 @@ internal class OverlayInteractionController(
                 bubbleStateMachine.dispatch(BubbleEvent.SingleTap)
             }
             else -> {
-                openCropSheet()
+                if (isVoiceRoute()) {
+                    startVoiceRecording(false, slot)
+                } else {
+                    openCropSheet()
+                }
             }
         }
     }
 
-    fun handleLongPress(anchorX: Int = 0, anchorY: Int = 0) {
+    /**
+     * 2 号球只有一件事：录音。
+     *
+     * 它有固定角色（语音+画面），所以不做「按当前工作模式分流」那一套；
+     * 正在处理时忽略点击，避免把上一题的结果顶掉。
+     */
+    private fun handleSecondarySingleTap(currentState: BubbleState) {
+        when (currentState) {
+            is BubbleState.Recording -> stopVoiceRecording()
+            is BubbleState.MenuExpanded -> bubbleStateMachine.dispatch(BubbleEvent.CloseMenu)
+            is BubbleState.Processing -> AppDebugLogStore.i(tag, "secondary tap ignored, still processing")
+            is BubbleState.MultiPageCapture,
+            is BubbleState.MultiPageCapturing,
+            is BubbleState.MultiPageCaptureSuccess ->
+                AppDebugLogStore.i(tag, "secondary tap ignored, multi page capture running")
+            else -> startVoiceRecording(false, BubbleSlot.SECONDARY)
+        }
+    }
+
+    fun handleLongPress(slot: BubbleSlot = BubbleSlot.PRIMARY, anchorX: Int = 0, anchorY: Int = 0) {
         val currentState = bubbleStateMachine.currentState
-        AppDebugLogStore.i(tag, "handleLongPress state=${currentState::class.simpleName} anchor=($anchorX,$anchorY)")
+        AppDebugLogStore.i(tag, "handleLongPress slot=$slot state=${currentState::class.simpleName} anchor=($anchorX,$anchorY)")
+
+        if (slot == BubbleSlot.SECONDARY) {
+            // 2 号球长按 = 放弃这次录音；没在录音就什么都不做，免得误触进多页截图
+            if (currentState is BubbleState.Recording) cancelVoiceRecording()
+            return
+        }
 
         when (currentState) {
+            is BubbleState.Recording -> {
+                // 长按 = 放弃这次录音
+                cancelVoiceRecording()
+            }
             is BubbleState.MultiPageCapture -> {
                 if (currentState.capturedBitmaps.isNotEmpty()) {
                     sendCaptures()
@@ -121,11 +170,29 @@ internal class OverlayInteractionController(
         }
     }
 
-    fun handleDoubleTap(anchorX: Int = 0, anchorY: Int = 0) {
+    fun handleDoubleTap(slot: BubbleSlot = BubbleSlot.PRIMARY, anchorX: Int = 0, anchorY: Int = 0) {
         val currentState = bubbleStateMachine.currentState
-        AppDebugLogStore.i(tag, "handleDoubleTap state=${currentState::class.simpleName}")
+        AppDebugLogStore.i(tag, "handleDoubleTap slot=$slot state=${currentState::class.simpleName}")
+
+        if (slot == BubbleSlot.SECONDARY) {
+            when (currentState) {
+                is BubbleState.Recording -> cancelVoiceRecording()
+                is BubbleState.MenuExpanded -> bubbleStateMachine.dispatch(BubbleEvent.CloseMenu)
+                is BubbleState.Processing,
+                is BubbleState.MultiPageCapture,
+                is BubbleState.MultiPageCapturing,
+                is BubbleState.MultiPageCaptureSuccess -> Unit
+                else -> if (isBubbleMenuEnabled()) {
+                    bubbleStateMachine.dispatch(BubbleEvent.LongPress(anchorX, anchorY))
+                }
+            }
+            return
+        }
 
         when (currentState) {
+            is BubbleState.Recording -> {
+                cancelVoiceRecording()
+            }
             is BubbleState.MultiPageCapture,
             is BubbleState.MultiPageCapturing,
             is BubbleState.MultiPageCaptureSuccess -> {
@@ -163,7 +230,8 @@ internal class OverlayInteractionController(
             BubbleMenuItem.ToggleSearch -> toggleWebSearch()
             BubbleMenuItem.Settings -> openSettings()
             BubbleMenuItem.VoiceRecognition -> {
-                // 语音功能暂未实现
+                // 麦克风是独立入口，但菜单还在退场：这里不直接开录，
+                // 由 ViewModel 在 onMenuDismissed() 之后再启动，否则 CloseMenu 会把状态重置回 Idle。
             }
         }
         // 不在此处 dispatch CloseMenu。
