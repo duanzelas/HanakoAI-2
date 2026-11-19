@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import `fun`.kirari.hanako.core.data.ModelPurpose
 import `fun`.kirari.hanako.core.model.ProcessingRoute
+import `fun`.kirari.hanako.core.model.shortLabel
 import kotlinx.coroutines.delay
 
 @Composable
@@ -53,7 +54,7 @@ internal fun ModeModelRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (currentRoute == ProcessingRoute.OCR_THEN_LLM) "OCR模式" else "多模态模式",
+                    text = currentRoute.shortLabel,
                     modifier = Modifier.clickable(onClick = onToggleProcessingRoute),
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1

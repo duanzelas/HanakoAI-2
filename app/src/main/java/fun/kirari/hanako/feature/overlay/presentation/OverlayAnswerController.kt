@@ -34,24 +34,41 @@ internal class OverlayAnswerController(
         process(listOf(bitmap))
     }
 
-    fun process(bitmaps: List<Bitmap>) {
+    fun process(
+        bitmaps: List<Bitmap>,
+        audioTranscript: String? = null,
+        audioDurationMillis: Long = 0L,
+        notice: String? = null
+    ) {
         val firstBitmap = bitmaps.firstOrNull() ?: return
         val state = uiState.value
-        AppDebugLogStore.i(tag, "process start route=${state.settings.processingRoute} bitmapCount=${bitmaps.size}")
+        val effectiveSettings = state.effectiveSettings()
+        AppDebugLogStore.i(
+            tag,
+            "process start route=${state.effectiveRoute} bitmapCount=${bitmaps.size} " +
+                "transcriptLength=${audioTranscript?.length ?: 0}"
+        )
         uiState.update {
             it.copy(
                 selectedBitmap = firstBitmap,
                 liveOcrText = "",
                 liveAnswerText = "",
                 result = null,
-                error = null,
+                // 语音降级提示（例如「内录没有声音…，本次仅用截图作答」）要留在面板上
+                error = notice,
                 working = true,
                 sheetVisible = true,
                 sheetMode = OverlaySheetMode.RESULT
             )
         }
         val handle = runCatching {
-            solveOperations.startAnswer(state.settings, bitmaps)
+            solveOperations.startAnswer(
+                settings = effectiveSettings,
+                bitmaps = bitmaps,
+                audioTranscript = audioTranscript,
+                audioDurationMillis = audioDurationMillis,
+                notice = notice
+            )
         }.onFailure(::showStartFailure).getOrNull() ?: return
         observe(handle)
     }
@@ -78,7 +95,7 @@ internal class OverlayAnswerController(
             )
         }
         val handle = runCatching {
-            solveOperations.regenerate(uiState.value.settings, existingResult, bitmaps)
+            solveOperations.regenerate(uiState.value.effectiveSettings(), existingResult, bitmaps)
         }.onFailure(::showStartFailure).getOrNull() ?: return
         observe(handle)
     }

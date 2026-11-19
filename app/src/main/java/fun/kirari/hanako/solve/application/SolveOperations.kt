@@ -49,20 +49,38 @@ internal class SolveOperations(
     val pendingAutomationResults: StateFlow<Map<String, ProcessingResult>> =
         taskManager.pendingAutomationResults
 
-    fun startAnswer(settings: AppSettings, bitmaps: List<Bitmap>): SolveTaskHandle {
+    fun startAnswer(
+        settings: AppSettings,
+        bitmaps: List<Bitmap>,
+        audioTranscript: String? = null,
+        audioDurationMillis: Long = 0L,
+        notice: String? = null
+    ): SolveTaskHandle {
         require(bitmaps.isNotEmpty()) { "没有可处理的截图" }
         val taskId = taskManager.startAnswerTask(
             models = pipeline.resolveModels(settings),
-            bitmaps = bitmaps
+            bitmaps = bitmaps,
+            audioTranscript = audioTranscript,
+            audioDurationMillis = audioDurationMillis,
+            notice = notice
         )
         return taskHandle(taskId)
     }
 
-    fun startAutomation(settings: AppSettings, bitmaps: List<Bitmap>): SolveTaskHandle {
+    fun startAutomation(
+        settings: AppSettings,
+        bitmaps: List<Bitmap>,
+        audioTranscript: String? = null,
+        audioDurationMillis: Long = 0L,
+        notice: String? = null
+    ): SolveTaskHandle {
         require(bitmaps.isNotEmpty()) { "没有可处理的截图" }
         val taskId = taskManager.startAutomationTask(
             models = pipeline.resolveModels(settings),
-            bitmaps = bitmaps
+            bitmaps = bitmaps,
+            audioTranscript = audioTranscript,
+            audioDurationMillis = audioDurationMillis,
+            notice = notice
         )
         return taskHandle(taskId)
     }
@@ -224,7 +242,8 @@ internal fun AppSettings.withConversationModel(
     return when (route) {
         `fun`.kirari.hanako.core.model.ProcessingRoute.OCR_THEN_LLM ->
             copy(textModelSelection = selection)
-        `fun`.kirari.hanako.core.model.ProcessingRoute.MULTIMODAL_DIRECT ->
+        `fun`.kirari.hanako.core.model.ProcessingRoute.MULTIMODAL_DIRECT,
+        `fun`.kirari.hanako.core.model.ProcessingRoute.AUDIO_AND_SCREEN ->
             copy(visionModelSelection = selection)
     }
 }

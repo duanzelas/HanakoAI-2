@@ -94,7 +94,7 @@ internal fun ResultOverlaySheet(
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             ) {
                 SheetTitleRow(
-                    title = { Text("Hanako") },
+                    title = { Text("HanakoAI-EX") },
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -113,8 +113,10 @@ internal fun ResultOverlaySheet(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     ResultImageCard(uiState)
-                    if (uiState.settings.processingRoute == ProcessingRoute.OCR_THEN_LLM) {
-                        OcrResultCard(uiState)
+                    when (uiState.effectiveRoute) {
+                        ProcessingRoute.OCR_THEN_LLM -> OcrResultCard(uiState)
+                        ProcessingRoute.AUDIO_AND_SCREEN -> OcrResultCard(uiState, title = "语音转写")
+                        ProcessingRoute.MULTIMODAL_DIRECT -> Unit
                     }
                     AnswerResultCard(
                         answerText = displayedAnswer,
@@ -163,23 +165,23 @@ private fun ResultImageCard(uiState: OverlayUiState) {
 }
 
 @Composable
-private fun OcrResultCard(uiState: OverlayUiState) {
+private fun OcrResultCard(uiState: OverlayUiState, title: String = "OCR 结果") {
     val context = LocalContext.current
     ResultContentCard(
-        title = "OCR 结果",
+        title = title,
         actions = {
             if (!uiState.working && uiState.liveOcrText.isNotBlank()) {
                 SmallHeaderAction(
                     label = "复制原文",
                     onClick = {
-                        copyToClipboardWithToast(context, "Hanako OCR 原文", uiState.liveOcrText, "已复制 OCR 原文")
+                        copyToClipboardWithToast(context, "Hanako $title", uiState.liveOcrText, "已复制$title")
                     }
                 )
             }
         }
     ) {
         if (uiState.liveOcrText.isBlank() && uiState.working) {
-            LoadingLine("正在识别文字…")
+            LoadingLine(if (title == "OCR 结果") "正在识别文字…" else "正在转写语音…")
         } else {
             val ocrText = uiState.liveOcrText
             if (ocrText.isNotBlank()) {

@@ -28,10 +28,20 @@ internal class HanakoWorkflowFactory(
 ) : HanakoWorkflowEngine {
     private val capturePersistNode = CapturePersistNode(appContext)
 
+    /** 语音+画面走视觉模型（截图直接给模型看），OCR 走文本模型。 */
+    private fun modelSummaryOf(models: ProcessingPipeline.ResolvedModels): String = when (models.route) {
+        ProcessingRoute.OCR_THEN_LLM -> pipeline.buildModelSummary(models.textModel, models.textProvider?.name)
+        ProcessingRoute.MULTIMODAL_DIRECT,
+        ProcessingRoute.AUDIO_AND_SCREEN -> pipeline.buildModelSummary(models.visionModel, models.visionProvider?.name)
+    }
+
     override suspend fun prepareBaseResult(
         models: ProcessingPipeline.ResolvedModels,
         bitmaps: List<Bitmap>,
-        detail: String
+        detail: String,
+        audioTranscript: String?,
+        audioDurationMillis: Long,
+        notice: String?
     ): Pair<ProcessingResult, CapturedImages> {
         val workflowId = java.util.UUID.randomUUID().toString()
         val workflowContext = WorkflowContext(workflowId = workflowId)
@@ -42,14 +52,24 @@ internal class HanakoWorkflowFactory(
             assistantName = models.assistant.name,
             route = models.route,
             status = ProcessingStatus.RUNNING,
-            modelSummary = when (models.route) {
-                ProcessingRoute.OCR_THEN_LLM -> pipeline.buildModelSummary(models.textModel, models.textProvider?.name)
-                ProcessingRoute.MULTIMODAL_DIRECT -> pipeline.buildModelSummary(models.visionModel, models.visionProvider?.name)
-            },
-            detail = detail,
+            modelSummary = modelSummaryOf(models),
+            detail = if (notice.isNullOrBlank()) detail else "仅画面作答：$notice",
             screenshotPath = captured.screenshotPaths.firstOrNull(),
             screenshotPaths = captured.screenshotPaths,
-            events = listOf(ProcessingEvent(title = "请求开始", detail = "已创建处理记录"))
+            audioTranscript = audioTranscript.orEmpty(),
+            audioDurationMillis = audioDurationMillis,
+            extractedText = audioTranscript.orEmpty(),
+            events = listOf(
+                ProcessingEvent(
+                    title = "请求开始",
+                    detail = when {
+                        !audioTranscript.isNullOrBlank() ->
+                            "已创建处理记录（含 ${audioTranscript.length} 字语音转写）"
+                        !notice.isNullOrBlank() -> "已创建处理记录（语音不可用：$notice）"
+                        else -> "已创建处理记录"
+                    }
+                )
+            )
         )
         return baseResult to captured
     }
@@ -69,10 +89,7 @@ internal class HanakoWorkflowFactory(
             assistantName = models.assistant.name,
             route = models.route,
             status = ProcessingStatus.RUNNING,
-            modelSummary = when (models.route) {
-                ProcessingRoute.OCR_THEN_LLM -> pipeline.buildModelSummary(models.textModel, models.textProvider?.name)
-                ProcessingRoute.MULTIMODAL_DIRECT -> pipeline.buildModelSummary(models.visionModel, models.visionProvider?.name)
-            },
+            modelSummary = modelSummaryOf(models),
             detail = detail,
             extractedText = "",
             answer = existingResult.latestAnswerText(),
@@ -89,7 +106,8 @@ internal class HanakoWorkflowFactory(
         capturedImages: CapturedImages,
         onOcrDelta: suspend (String) -> Unit,
         onAnswerDelta: suspend (String) -> Unit,
-        onProgressEvent: suspend (ProcessingEvent) -> Unit
+        onProgressEvent: suspend (ProcessingEvent) -> Unit,
+        audioTranscript: String?
     ): AnswerWorkflowOutput {
         val ctx = WorkflowContext(workflowId = capturedImages.historyId)
         val ocrOutput = if (models.route == ProcessingRoute.OCR_THEN_LLM) {
@@ -131,7 +149,12 @@ internal class HanakoWorkflowFactory(
         )
         val answerResult = workflowRunner.runNode(
             answerNode,
-            AnswerNodeInput(capturedImages = capturedImages, models = models, ocrOutput = ocrOutput),
+            AnswerNodeInput(
+                capturedImages = capturedImages,
+                models = models,
+                ocrOutput = ocrOutput,
+                audioTranscript = audioTranscript
+            ),
             ctx
         )
         return AnswerWorkflowOutput(
@@ -147,7 +170,8 @@ internal class HanakoWorkflowFactory(
         capturedImages: CapturedImages,
         onOcrDelta: suspend (String) -> Unit,
         onThoughtDelta: suspend (String) -> Unit,
-        onProgressEvent: suspend (ProcessingEvent) -> Unit
+        onProgressEvent: suspend (ProcessingEvent) -> Unit,
+        audioTranscript: String?
     ): AutomationWorkflowOutput {
         val ctx = WorkflowContext(workflowId = capturedImages.historyId)
         val ocrOutput = if (models.route == ProcessingRoute.OCR_THEN_LLM) {
@@ -188,7 +212,12 @@ internal class HanakoWorkflowFactory(
         )
         val automationResult = workflowRunner.runNode(
             automationNode,
-            AutomationNodeInput(capturedImages = capturedImages, models = models, ocrOutput = ocrOutput),
+            AutomationNodeInput(
+                capturedImages = capturedImages,
+                models = models,
+                ocrOutput = ocrOutput,
+                audioTranscript = audioTranscript
+            ),
             ctx
         )
         return AutomationWorkflowOutput(
@@ -217,7 +246,7 @@ internal class HanakoWorkflowFactory(
         return base.copy(
             status = ProcessingStatus.SUCCESS,
             detail = "处理完成",
-            extractedText = output.ocrOutput?.text.orEmpty(),
+            extractedText = output.ocrOutput?.text ?: base.audioTranscript,
             answer = output.answerOutput.answer,
             answerVersions = listOf(AnswerVersion(output.answerOutput.answer)),
             events = events,

@@ -62,7 +62,10 @@ internal class WorkflowTaskManager(
 
     fun startAnswerTask(
         models: ProcessingPipeline.ResolvedModels,
-        bitmaps: List<Bitmap>
+        bitmaps: List<Bitmap>,
+        audioTranscript: String? = null,
+        audioDurationMillis: Long = 0L,
+        notice: String? = null
     ): String {
         val taskId = java.util.UUID.randomUUID().toString()
         taskRegistry.register(taskId, historyId = null, kind = WorkflowTaskKind.ANSWER)
@@ -72,7 +75,13 @@ internal class WorkflowTaskManager(
             val answerText = StringBuilder()
             runCatching {
                 withTimeout(processingTimeoutMillis) {
-                    val (preparedBaseResult, capturedImages) = workflowFactory.prepareBaseResult(models, bitmaps)
+                    val (preparedBaseResult, capturedImages) = workflowFactory.prepareBaseResult(
+                        models = models,
+                        bitmaps = bitmaps,
+                        audioTranscript = audioTranscript,
+                        audioDurationMillis = audioDurationMillis,
+                        notice = notice
+                    )
                     baseResult = preparedBaseResult
                     taskRegistry.bindHistory(taskId, preparedBaseResult.id)
                     resultStore.upsert(preparedBaseResult)
@@ -96,7 +105,8 @@ internal class WorkflowTaskManager(
                             resultStore.update(preparedBaseResult.id) { current ->
                                 current.copy(events = preparedBaseResult.events + progressEvents)
                             }
-                        }
+                        },
+                        audioTranscript = audioTranscript
                     )
                     val finished = workflowFactory.buildAnswerResult(
                         base = preparedBaseResult,
@@ -230,7 +240,10 @@ internal class WorkflowTaskManager(
 
     fun startAutomationTask(
         models: ProcessingPipeline.ResolvedModels,
-        bitmaps: List<Bitmap>
+        bitmaps: List<Bitmap>,
+        audioTranscript: String? = null,
+        audioDurationMillis: Long = 0L,
+        notice: String? = null
     ): String {
         val taskId = java.util.UUID.randomUUID().toString()
         taskRegistry.register(taskId, historyId = null, kind = WorkflowTaskKind.AUTOMATION)
@@ -243,7 +256,10 @@ internal class WorkflowTaskManager(
                     val (preparedBaseResult, capturedImages) = workflowFactory.prepareBaseResult(
                         models = models,
                         bitmaps = bitmaps,
-                        detail = "自动流程已开始"
+                        detail = "自动流程已开始",
+                        audioTranscript = audioTranscript,
+                        audioDurationMillis = audioDurationMillis,
+                        notice = notice
                     )
                     baseResult = preparedBaseResult
                     taskRegistry.bindHistory(taskId, preparedBaseResult.id)
@@ -252,6 +268,7 @@ internal class WorkflowTaskManager(
                     val workflowOutput = workflowFactory.runAutomationWorkflow(
                         models = models,
                         capturedImages = capturedImages,
+                        audioTranscript = audioTranscript,
                         onOcrDelta = { text ->
                             resultStore.update(preparedBaseResult.id) { current ->
                                 current.copy(extractedText = text)

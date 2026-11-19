@@ -2,13 +2,17 @@ package `fun`.kirari.hanako.feature.settings.ui.settings
 
 import `fun`.kirari.hanako.feature.settings.ui.automation.AutoModeSettingsCard
 import `fun`.kirari.hanako.feature.settings.ui.automation.BubbleAppearanceResetButton
-import `fun`.kirari.hanako.feature.settings.ui.automation.BubbleAppearanceSettingsCard
 import `fun`.kirari.hanako.feature.settings.ui.automation.BubbleMenuSettingsCard
+import `fun`.kirari.hanako.feature.settings.ui.automation.MultiBubbleAppearancePanel
 
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.provider.Settings
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,8 +26,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.Adjust
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DonutLarge
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.MaterialTheme
@@ -45,8 +52,11 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import `fun`.kirari.hanako.BuildConfig
 import `fun`.kirari.hanako.core.data.AutomationSettings
 import `fun`.kirari.hanako.core.data.BubbleAppearanceSettings
+import `fun`.kirari.hanako.core.data.DEFAULT_SECONDARY_BUBBLE_BACKGROUND_COLOR
+import `fun`.kirari.hanako.core.data.DEFAULT_SECONDARY_BUBBLE_CONTENT_COLOR
 import `fun`.kirari.hanako.core.data.KirariSettings
 import `fun`.kirari.hanako.core.data.ScreenCaptureMethod
+import `fun`.kirari.hanako.core.data.TranscriptionSettings
 import `fun`.kirari.hanako.feature.home.presentation.RegisterScrollToTopHandler
 import `fun`.kirari.hanako.feature.overlay.window.OverlayWindowHost
 import kotlinx.coroutines.launch
@@ -58,6 +68,7 @@ fun MoreSettingsScreen(
     selectedMethod: ScreenCaptureMethod,
     trustAllHttpsCertificates: Boolean,
     kirariSettings: KirariSettings,
+    transcriptionSettings: TranscriptionSettings,
     hasKirariClientId: Boolean,
     hasNotificationPermission: Boolean,
     onToggleCompletionNotification: (Boolean) -> Unit,
@@ -68,6 +79,7 @@ fun MoreSettingsScreen(
     onUpdateTimeoutSeconds: (Int) -> Unit,
     onSelectMethod: (ScreenCaptureMethod) -> Unit,
     onToggleTrustAllHttpsCertificates: (Boolean) -> Unit,
+    onUpdateTranscriptionSettings: (TranscriptionSettings) -> Unit,
     onUpdateKirariServerUrl: (String) -> Unit,
     onLoginKirari: () -> Unit,
     onLogoutKirari: () -> Unit
@@ -91,23 +103,60 @@ fun MoreSettingsScreen(
     ) {
         item {
             MoreSettingCard(
+                icon = Icons.Default.Layers,
+                title = "多悬浮窗",
+                subtitle = if (automationSettings.multiBubbleEnabled) {
+                    "已开启：屏幕上有两颗球，1 号纯视觉、2 号语音+画面。"
+                } else {
+                    "开启后会多出一颗固定「语音+画面」的悬浮球。"
+                }
+            ) {
+                SwitchSettingRow(
+                    title = "同时显示两颗悬浮球",
+                    subtitle = "1 号球：截图直接问多模态模型；2 号球：录音 + 截图作答。两颗球的位置、外观各自独立。",
+                    checked = automationSettings.multiBubbleEnabled,
+                    onCheckedChange = { enabled ->
+                        onUpdateAutomationSettings(
+                            automationSettings.copy(multiBubbleEnabled = enabled)
+                        )
+                    }
+                )
+            }
+        }
+        item {
+            MoreSettingCard(
                 icon = Icons.Default.Adjust,
                 title = "悬浮球外观",
-                subtitle = "调整悬浮球的尺寸与透明度。",
+                subtitle = "悬浮窗 1 / 2 的尺寸、透明度与配色分开设置。",
                 trailing = {
                     BubbleAppearanceResetButton(
                         onReset = {
                             onUpdateAutomationSettings(
-                                automationSettings.copy(bubbleAppearance = BubbleAppearanceSettings())
+                                automationSettings.copy(
+                                    bubbleAppearance = BubbleAppearanceSettings(),
+                                    secondaryBubbleAppearance = BubbleAppearanceSettings(
+                                        backgroundColor = DEFAULT_SECONDARY_BUBBLE_BACKGROUND_COLOR,
+                                        contentColor = DEFAULT_SECONDARY_BUBBLE_CONTENT_COLOR
+                                    )
+                                )
                             )
                         }
                     )
                 }
             ) {
-                BubbleAppearanceSettingsCard(
-                    settings = automationSettings.bubbleAppearance,
-                    onChange = { bubbleAppearance ->
-                        onUpdateAutomationSettings(automationSettings.copy(bubbleAppearance = bubbleAppearance))
+                MultiBubbleAppearancePanel(
+                    primary = automationSettings.bubbleAppearance,
+                    secondary = automationSettings.secondaryBubbleAppearance,
+                    multiBubbleEnabled = automationSettings.multiBubbleEnabled,
+                    onPrimaryChange = { bubbleAppearance ->
+                        onUpdateAutomationSettings(
+                            automationSettings.copy(bubbleAppearance = bubbleAppearance)
+                        )
+                    },
+                    onSecondaryChange = { appearance ->
+                        onUpdateAutomationSettings(
+                            automationSettings.copy(secondaryBubbleAppearance = appearance)
+                        )
                     }
                 )
             }
@@ -132,9 +181,25 @@ fun MoreSettingsScreen(
         }
         item {
             MoreSettingCard(
+                icon = Icons.Default.Mic,
+                title = "语音转写",
+                subtitle = if (transcriptionSettings.enabled) {
+                    "DeepSeek ASR · 仅英文 · ${transcriptionSettings.path}"
+                } else {
+                    "已关闭，语音+画面模式不可用。"
+                }
+            ) {
+                TranscriptionSettingsCard(
+                    settings = transcriptionSettings,
+                    onChange = onUpdateTranscriptionSettings
+                )
+            }
+        }
+        item {
+            MoreSettingCard(
                 icon = Icons.Default.SmartToy,
                 title = "自动模式",
-                subtitle = "主页长按启动进入自动模式。"
+                subtitle = "主页长按启动：不弹面板，答案落在悬浮球上或复制。"
             ) {
                 AutoModeSettingsCard(
                     automationSettings = automationSettings,
@@ -190,7 +255,74 @@ fun MoreSettingsScreen(
                 }
             }
         }
+        item { GitHubRepoCard() }
         item { Spacer(modifier = Modifier.height(80.dp)) }
+    }
+}
+
+/** 项目仓库地址。改仓库时只改这一处。 */
+private const val GITHUB_REPO_URL = "https://github.com/duanzelas/HanakoAI-EX"
+
+/**
+ * 仓库入口。
+ *
+ * 放在「更多」最底部，配合当前版本号：用户报问题前至少能确认自己装的是哪个版本，
+ * 也方便直接从手机上点开源码/更新日志。
+ */
+@Composable
+private fun GitHubRepoCard() {
+    val context = LocalContext.current
+    MoreSettingCard(
+        icon = Icons.Default.Code,
+        title = "GitHub 仓库",
+        subtitle = "源码、更新日志与问题反馈。",
+        trailing = {
+            Surface(
+                shape = RoundedCornerShape(percent = 50),
+                color = MaterialTheme.colorScheme.secondaryContainer
+            ) {
+                Text(
+                    text = "打开",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+        }
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { openUrl(context, GITHUB_REPO_URL) },
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = GITHUB_REPO_URL,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "当前版本 v${BuildConfig.VERSION_NAME} · 点击用浏览器打开",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+private fun openUrl(context: Context, url: String) {
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }.onFailure {
+        Toast.makeText(context, "没有可用的浏览器", Toast.LENGTH_SHORT).show()
     }
 }
 

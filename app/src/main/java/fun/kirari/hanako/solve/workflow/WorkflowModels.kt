@@ -27,7 +27,9 @@ internal data class OcrNodeOutput(
 internal data class AnswerNodeInput(
     val capturedImages: CapturedImages,
     val models: ProcessingPipeline.ResolvedModels,
-    val ocrOutput: OcrNodeOutput?
+    val ocrOutput: OcrNodeOutput?,
+    /** 语音模式下已经转写好的文本；null 表示这次没有语音输入。 */
+    val audioTranscript: String? = null
 )
 
 internal data class AnswerNodeOutput(
@@ -46,7 +48,9 @@ internal data class AnswerWorkflowOutput(
 internal data class AutomationNodeInput(
     val capturedImages: CapturedImages,
     val models: ProcessingPipeline.ResolvedModels,
-    val ocrOutput: OcrNodeOutput?
+    val ocrOutput: OcrNodeOutput?,
+    /** 语音模式下已经转写好的文本；null 表示这次没有语音输入。 */
+    val audioTranscript: String? = null
 )
 
 internal data class AutomationNodeOutput(

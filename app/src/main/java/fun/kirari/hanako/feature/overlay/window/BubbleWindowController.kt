@@ -35,9 +35,18 @@ internal class BubbleWindowController(
     private val onLongPress: () -> Unit,
     private val onLongPressHaptic: () -> Unit,
     private val isStaticModeEnabled: () -> Boolean,
-    private val bubbleAppearanceSettings: () -> BubbleAppearanceSettings
+    private val bubbleAppearanceSettings: () -> BubbleAppearanceSettings,
+    /** 初始落点，两颗球错开摆放，避免完全重叠。 */
+    private val initialX: Int = 32,
+    private val initialY: Int = 360,
+    /** 日志里区分是哪颗球。 */
+    private val slotName: String = "primary",
+    /** 2 号球：语音+画面，闲置外观用麦克风图标。 */
+    private val voiceRole: Boolean = false,
+    /** 当前工作模式是否为「语音+画面」：决定自动模式下用麦克风还是星星图标。 */
+    private val voiceRouteEnabled: () -> Boolean = { false }
 ) {
-    private val logTag = "HanakoBubbleWindow"
+    private val logTag = "HanakoBubbleWindow-" + slotName
     private var bubbleView: FrameLayout? = null
     private var surfaceView: FrameLayout? = null
     private var shadowView: View? = null
@@ -58,10 +67,13 @@ internal class BubbleWindowController(
                 state = BubbleState.Idle,
                 launchMode = CaptureLaunchMode.NORMAL,
                 context = context,
-                staticModeEnabled = isStaticModeEnabled()
+                staticModeEnabled = isStaticModeEnabled(),
+                voiceRole = voiceRole,
+                voiceRoute = voiceRouteEnabled()
             ),
             settings = initialSettings,
-            text = null
+            text = null,
+            letterSizeDp = initialSettings.letterTextSizeDp
         )
         val surfaceSizePx = initialLayout.surfaceWidthPx
         val iconSizePx = (initialSettings.bubbleDiameterDp * density * 0.5f).roundToInt()
@@ -75,8 +87,8 @@ internal class BubbleWindowController(
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.START or Gravity.TOP
-            x = 32
-            y = 360
+            x = initialX
+            y = initialY
         }
         val shadowView = android.view.View(context).apply {
             layoutParams = FrameLayout.LayoutParams(0, 0, Gravity.CENTER)
@@ -155,19 +167,35 @@ internal class BubbleWindowController(
         val icon = iconView ?: return
         val text = textView
         val spinner = spinnerView
+        val staticMode = isStaticModeEnabled()
+        val realSettings = bubbleAppearanceSettings()
+        // 菜单展开时用默认尺寸：球体可能被设成 0，菜单就点不到了；配色仍按用户设置走
         val settings = if (bubbleState is BubbleState.MenuExpanded) {
-            BubbleAppearanceSettings()
+            BubbleAppearanceSettings(
+                customColorsEnabled = realSettings.customColorsEnabled,
+                backgroundColor = realSettings.backgroundColor,
+                contentColor = realSettings.contentColor,
+                borderColor = realSettings.borderColor
+            )
         } else {
-            bubbleAppearanceSettings()
+            realSettings
         }
         val appearance = BubbleRenderer.render(
             state = bubbleState,
             launchMode = launchMode,
             context = context,
-            staticModeEnabled = isStaticModeEnabled()
-        )
+            staticModeEnabled = staticMode,
+            voiceRole = voiceRole,
+            voiceRoute = voiceRouteEnabled()
+        ).let { if (staticMode) it else it.styledBy(realSettings) }
         val overallAlpha = (settings.overallOpacity / 100f).coerceIn(0f, 1f)
-        val layout = resolveLayout(appearance, settings, text)
+        // 倒计时胶囊有独立字号，避免 `1:23` 被字母大小撑变形
+        val letterSizeDp = if (bubbleState is BubbleState.Recording) {
+            realSettings.countdownTextSizeDp
+        } else {
+            settings.letterTextSizeDp
+        }
+        val layout = resolveLayout(appearance, settings, text, letterSizeDp)
         updateWindowSize(layout)
         updateSurfaceSize(bubble, layout, overallAlpha)
         applySurfaceShape(bubble, appearance, layout)
@@ -440,10 +468,11 @@ internal class BubbleWindowController(
     private fun resolveLayout(
         appearance: `fun`.kirari.hanako.feature.overlay.window.BubbleAppearance,
         settings: BubbleAppearanceSettings,
-        text: TextView?
+        text: TextView?,
+        letterSizeDp: Float = settings.letterTextSizeDp
     ): BubbleLayout {
         val displayMetrics = context.resources.displayMetrics
-        val letterTextSizePx = maxOf(settings.letterTextSizeDp * displayMetrics.scaledDensity, 1f)
+        val letterTextSizePx = maxOf(letterSizeDp * displayMetrics.scaledDensity, 1f)
         val letters = appearance.letters
         val needsTextMeasure = appearance.shape == BubbleShape.ROUNDED_RECT && !letters.isNullOrEmpty()
         val measured = if (needsTextMeasure && text != null) {
@@ -460,7 +489,7 @@ internal class BubbleWindowController(
                 screenWidthPx = displayMetrics.widthPixels,
                 bubbleDiameterDp = settings.bubbleDiameterDp,
                 spinnerDiameterDp = settings.spinnerDiameterDp,
-                letterTextSizeDp = settings.letterTextSizeDp,
+                letterTextSizeDp = letterSizeDp,
                 letterTextSizePx = letterTextSizePx,
                 naturalTextWidthPx = measured?.first ?: 0f,
                 naturalTextHeightPx = measured?.second ?: 0f
@@ -547,6 +576,8 @@ internal class BubbleWindowController(
             drawable.cornerRadius = targetCornerRadius
             bubble.background = drawable
         }
+        // 描边色跟着外观走（自定义配色时是用户选的颜色）
+        drawable.setStroke((1.5f * density).roundToInt(), appearance.borderColor)
         val startColor = existing?.color?.defaultColor ?: appearance.backgroundColor
         colorAnimator?.cancel()
         if (appearance.animateTransitions) {

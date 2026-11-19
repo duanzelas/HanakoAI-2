@@ -131,13 +131,30 @@ enum class ScreenCaptureMethod {
     SHIZUKU_ADB
 }
 
+/**
+ * 单个悬浮球的外观。
+ *
+ * 「悬浮窗 2」复用同一个结构，只是由 [AutomationSettings.secondaryBubbleAppearance] 另一份实例承载，
+ * 所以两颗球可以各自设置尺寸、透明度和配色。
+ *
+ * 颜色是 ARGB 整数而不是十六进制字符串：直接喂给 `GradientDrawable.setColor` / `setTextColor`，
+ * 少一层解析，也避免用户输入非法颜色时崩在渲染路径上。
+ */
 @Serializable
 data class BubbleAppearanceSettings(
     val bubbleDiameterDp: Float = DEFAULT_BUBBLE_DIAMETER_DP,
     val spinnerDiameterDp: Float = DEFAULT_SPINNER_DIAMETER_DP,
     val letterTextSizeDp: Float = DEFAULT_BUBBLE_LETTER_TEXT_SIZE_DP,
     val letterOpacity: Float = DEFAULT_BUBBLE_LETTER_OPACITY,
-    val overallOpacity: Float = DEFAULT_BUBBLE_OPACITY
+    val overallOpacity: Float = DEFAULT_BUBBLE_OPACITY,
+    /** 录音倒计时胶囊的字号，和字母大小分开，避免把 `1:23` 撑出球体。 */
+    val countdownTextSizeDp: Float = DEFAULT_COUNTDOWN_TEXT_SIZE_DP,
+    /** 关闭时配色跟随状态（错误红、内录蓝、麦克风红…），开启后统一用下面三个颜色。 */
+    val customColorsEnabled: Boolean = false,
+    val backgroundColor: Int = DEFAULT_BUBBLE_BACKGROUND_COLOR,
+    /** 图标与字母（含倒计时文字）的颜色。 */
+    val contentColor: Int = DEFAULT_BUBBLE_CONTENT_COLOR,
+    val borderColor: Int = DEFAULT_BUBBLE_BORDER_COLOR
 )
 
 const val DEFAULT_BUBBLE_DIAMETER_DP = 40f
@@ -152,6 +169,19 @@ const val MAX_SPINNER_DIAMETER_DP = 70f
 const val MIN_BUBBLE_LETTER_TEXT_SIZE_DP = 8f
 const val MAX_BUBBLE_LETTER_TEXT_SIZE_DP = 96f
 
+const val DEFAULT_COUNTDOWN_TEXT_SIZE_DP = 18f
+const val MIN_COUNTDOWN_TEXT_SIZE_DP = 8f
+const val MAX_COUNTDOWN_TEXT_SIZE_DP = 44f
+
+/** Material 3 的浅紫球体，和 Idle 状态默认配色一致。 */
+const val DEFAULT_BUBBLE_BACKGROUND_COLOR = 0xFFD0BCFF.toInt()
+const val DEFAULT_BUBBLE_CONTENT_COLOR = 0xFF381E72.toInt()
+const val DEFAULT_BUBBLE_BORDER_COLOR = 0xFFFFFFFF.toInt()
+
+/** 悬浮窗 2 的默认配色稍微偏粉，开了自定义配色就能一眼分清两颗球。 */
+const val DEFAULT_SECONDARY_BUBBLE_BACKGROUND_COLOR = 0xFFFFD8E4.toInt()
+const val DEFAULT_SECONDARY_BUBBLE_CONTENT_COLOR = 0xFF8C1D18.toInt()
+
 @Serializable
 data class AutomationSettings(
     val completionNotificationEnabled: Boolean = true,
@@ -160,7 +190,15 @@ data class AutomationSettings(
     val staticIntraLetterGapMs: Int = 400,
     val staticInterLetterGapMs: Int = 1000,
     val bubbleMenuEnabled: Boolean = true,
-    val bubbleAppearance: BubbleAppearanceSettings = BubbleAppearanceSettings()
+    /** 悬浮窗 1：纯视觉（截图直接问多模态模型）。 */
+    val bubbleAppearance: BubbleAppearanceSettings = BubbleAppearanceSettings(),
+    /** 是否同时显示第二颗悬浮球。 */
+    val multiBubbleEnabled: Boolean = false,
+    /** 悬浮窗 2：语音+画面（内录/麦克风 + 截图）。 */
+    val secondaryBubbleAppearance: BubbleAppearanceSettings = BubbleAppearanceSettings(
+        backgroundColor = DEFAULT_SECONDARY_BUBBLE_BACKGROUND_COLOR,
+        contentColor = DEFAULT_SECONDARY_BUBBLE_CONTENT_COLOR
+    )
 )
 
 @Serializable
@@ -194,10 +232,50 @@ data class WebSearchSettings(
     val automationAlsoSearch: Boolean = false
 )
 
+/**
+ * 语音转写配置，默认对接 DeepSeek 官方 ASR。
+ *
+ * 注意 DeepSeek 的 `/v1/tools/asr` **没有 language 参数**，语种强制自动识别，
+ * 所以 [language] 只在换成 OpenAI 兼容的 `/audio/transcriptions` 时才会真的发给服务端；
+ * 对 DeepSeek 而言它只作为提示词里的语境约束（[englishOnly] 决定要不要提示模型按英文理解）。
+ */
+@Serializable
+data class TranscriptionSettings(
+    val enabled: Boolean = true,
+    val baseUrl: String = `fun`.kirari.llm.core.TranscriptionClient.DEFAULT_BASE_URL,
+    val path: String = `fun`.kirari.llm.core.TranscriptionClient.DEFAULT_PATH,
+    val apiKey: String = "",
+    /** BCP-47 语言码。只需英文时保持 en。 */
+    val language: String = "en",
+    /** 只接受英文转写结果：提示模型按英文理解，并在结果明显不是英文时给出提示。 */
+    val englishOnly: Boolean = true
+)
+
+/** 转写走的是 DeepSeek 官方 ASR（语种不可指定）。 */
+val TranscriptionSettings.isDeepSeekAsr: Boolean
+    get() = path.contains("/tools/asr")
+
+/**
+ * 转写用的 API Key：显式配了就用显式的，否则复用同域名的模型提供方，
+ * 这样已经填过 DeepSeek 的人不需要再抄一遍 Key。
+ */
+fun AppSettings.resolveTranscriptionApiKey(): String {
+    val explicit = transcription.apiKey.trim()
+    if (explicit.isNotBlank()) return explicit
+    val host = runCatching { java.net.URI(transcription.baseUrl.trim()).host }.getOrNull()
+    if (host != null) {
+        providers.firstOrNull { provider ->
+            provider.apiKey.isNotBlank() &&
+                runCatching { java.net.URI(provider.baseUrl.trim()).host }.getOrNull() == host
+        }?.let { return it.apiKey }
+    }
+    return providers.firstOrNull { it.id == selectedProviderId }?.apiKey.orEmpty()
+}
+
 @Serializable
 data class AppSettings(
     val schemaVersion: Int = StorageSchema.CURRENT_APP_DATA_VERSION,
-    val providers: List<ModelProviderConfig> = listOf(defaultProvider()),
+    val providers: List<ModelProviderConfig> = listOf(defaultProvider(), deepSeekProvider()),
     val selectedProviderId: String? = providers.firstOrNull()?.id,
     val assistants: List<AssistantPreset> = defaultAssistants(),
     val selectedAssistantId: String? = assistants.firstOrNull()?.id,
@@ -211,6 +289,7 @@ data class AppSettings(
     val localOcr: LocalOcrSettings = LocalOcrSettings(),
     val kirari: KirariSettings = KirariSettings(),
     val webSearch: WebSearchSettings = WebSearchSettings(),
+    val transcription: TranscriptionSettings = TranscriptionSettings(),
     val lastResult: ProcessingResult? = null,
     val history: List<ProcessingResult> = emptyList(),
     val historyGroups: List<HistoryGroup> = emptyList(),
@@ -218,6 +297,28 @@ data class AppSettings(
 )
 
 fun defaultProvider(): ModelProviderConfig = ModelProviderConfig()
+
+/** DeepSeek 官方 API 的默认模型：V4.1-Flash 的 model id 是 deepseek-flash。 */
+const val DEEPSEEK_DEFAULT_MODEL = "deepseek-flash"
+
+/**
+ * DeepSeek 预设：协议上就是 OpenAI Compatible，只是把 baseUrl 和默认模型换成官方的。
+ * V4.1-Flash 原生支持视觉，所以 chat / vision / ocr 三个用途共用一个模型即可。
+ */
+fun deepSeekProvider(): ModelProviderConfig = ModelProviderConfig(
+    name = "DeepSeek",
+    kind = ProviderKind.OPENAI_COMPATIBLE,
+    baseUrl = "https://api.deepseek.com/v1",
+    chatModel = DEEPSEEK_DEFAULT_MODEL,
+    visionModel = DEEPSEEK_DEFAULT_MODEL,
+    ocrModel = DEEPSEEK_DEFAULT_MODEL
+)
+
+/** 新增提供方时可选的预设。 */
+enum class ProviderPreset(val label: String) {
+    CUSTOM("自定义提供方"),
+    DEEPSEEK("DeepSeek")
+}
 
 fun kirariProvider(settings: KirariSettings = KirariSettings()): ModelProviderConfig = ModelProviderConfig(
     id = KIRARI_PROVIDER_ID,

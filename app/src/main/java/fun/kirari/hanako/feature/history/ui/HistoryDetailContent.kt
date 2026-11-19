@@ -88,10 +88,12 @@ internal fun HistoryDetailContent(
                     HistoryScreenshots(screenshots, onSingleImagePositioned, onPreviewImage)
                 }
             }
-            if (result.route == ProcessingRoute.OCR_THEN_LLM) {
+            if (result.route == ProcessingRoute.OCR_THEN_LLM ||
+                result.route == ProcessingRoute.AUDIO_AND_SCREEN
+            ) {
                 item {
                     ResultContentCard(
-                        title = "OCR 结果",
+                        title = if (result.route == ProcessingRoute.AUDIO_AND_SCREEN) "语音转写" else "OCR 结果",
                         actions = {
                             CopyTextButton(
                                 enabled = result.extractedText.isNotBlank(),
@@ -99,9 +101,9 @@ internal fun HistoryDetailContent(
                                 onClick = {
                                     copyToClipboardWithToast(
                                         context,
-                                        "Hanako OCR 原文",
+                                        if (result.route == ProcessingRoute.AUDIO_AND_SCREEN) "Hanako 语音转写" else "Hanako OCR 原文",
                                         result.extractedText,
-                                        "已复制 OCR 原文"
+                                        if (result.route == ProcessingRoute.AUDIO_AND_SCREEN) "已复制语音转写" else "已复制 OCR 原文"
                                     )
                                 }
                             )

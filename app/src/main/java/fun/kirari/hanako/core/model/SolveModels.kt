@@ -7,8 +7,22 @@ import kotlinx.serialization.Serializable
 @Serializable
 enum class ProcessingRoute {
     OCR_THEN_LLM,
-    MULTIMODAL_DIRECT
+    MULTIMODAL_DIRECT,
+
+    /**
+     * 语音 + 画面：录一段页面/视频里的声音，转成文字后连同截图一起交给多模态模型。
+     * 适合「视频里在讲什么」「这道题老师口述了条件」这类光看图 / 光听声都不够的场景。
+     */
+    AUDIO_AND_SCREEN
 }
+
+/** 窄区域（悬浮球面板、历史列表）用的短名。 */
+val ProcessingRoute.shortLabel: String
+    get() = when (this) {
+        ProcessingRoute.OCR_THEN_LLM -> "OCR模式"
+        ProcessingRoute.MULTIMODAL_DIRECT -> "多模态模式"
+        ProcessingRoute.AUDIO_AND_SCREEN -> "语音+画面"
+    }
 
 @Serializable
 data class ProcessingResult(
@@ -25,6 +39,10 @@ data class ProcessingResult(
     val automationThought: String = "",
     val automationAction: AutomationActionRecord? = null,
     val automationActionDelivery: AutomationActionDelivery = AutomationActionDelivery.COMPLETED,
+    /** 语音模式的转写文本，非语音模式为空。 */
+    val audioTranscript: String = "",
+    /** 录音时长，用于区分「没录到声音」和「转写服务返回空」。 */
+    val audioDurationMillis: Long = 0L,
     val screenshotBase64: String? = null,
     val screenshotPath: String? = null,
     val screenshotPaths: List<String> = emptyList(),

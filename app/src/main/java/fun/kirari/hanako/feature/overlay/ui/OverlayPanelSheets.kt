@@ -83,6 +83,7 @@ import `fun`.kirari.hanako.core.data.ModelPurpose
 import `fun`.kirari.hanako.core.data.ModelSelection
 import `fun`.kirari.hanako.core.data.availableProviders
 import `fun`.kirari.hanako.core.model.ProcessingRoute
+import `fun`.kirari.hanako.core.model.shortLabel
 import `fun`.kirari.hanako.core.data.displayName
 import `fun`.kirari.hanako.core.data.resolveModelName
 import `fun`.kirari.hanako.core.data.resolveModelProvider
@@ -117,10 +118,10 @@ internal fun CropOverlaySheet(
     var cropPromptVisible by remember { mutableStateOf(true) }
     val density = LocalDensity.current
     val selectedAssistant = uiState.settings.assistants.firstOrNull { it.id == uiState.settings.selectedAssistantId }
-    val routeText = if (uiState.settings.processingRoute == ProcessingRoute.OCR_THEN_LLM) "OCR模式" else "多模态模式"
+    val routeText = uiState.effectiveRoute.shortLabel
     val ocrProvider = uiState.settings.resolveModelProvider(ModelPurpose.OCR)
     val ocrModel = uiState.settings.resolveModelName(ModelPurpose.OCR)
-    val llmPurpose = if (uiState.settings.processingRoute == ProcessingRoute.OCR_THEN_LLM) ModelPurpose.TEXT else ModelPurpose.VISION
+    val llmPurpose = if (uiState.effectiveRoute == ProcessingRoute.OCR_THEN_LLM) ModelPurpose.TEXT else ModelPurpose.VISION
     val llmProvider = uiState.settings.resolveModelProvider(llmPurpose)
     val llmModel = uiState.settings.resolveModelName(llmPurpose)
     val selectionColor = MaterialTheme.colorScheme.primary
@@ -185,7 +186,7 @@ internal fun CropOverlaySheet(
                         }
                     )
                     ModeModelRow(
-                        route = uiState.settings.processingRoute,
+                        route = uiState.effectiveRoute,
                         ocrModel = ocrModel,
                         ocrProviderName = ocrProvider?.name,
                         llmModel = llmModel,

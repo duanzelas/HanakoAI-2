@@ -610,6 +610,7 @@ fun HanakoApp(viewModel: AppViewModel) {
                             selectedMethod = settings.screenCaptureMethod,
                             trustAllHttpsCertificates = settings.trustAllHttpsCertificates,
                             kirariSettings = settings.kirari,
+                            transcriptionSettings = settings.transcription,
                             hasKirariClientId = viewModel.hasKirariClientId(),
                             hasNotificationPermission = hasNotificationPermission,
                             onToggleCompletionNotification = { enabled ->
@@ -647,6 +648,9 @@ fun HanakoApp(viewModel: AppViewModel) {
                                 }
                             },
                             onToggleTrustAllHttpsCertificates = viewModel::setTrustAllHttpsCertificates,
+                            onUpdateTranscriptionSettings = { transcription ->
+                                viewModel.updateTranscriptionSettings { transcription }
+                            },
                             onUpdateKirariServerUrl = { serverUrl ->
                                 viewModel.updateKirariSettings { it.copy(serverUrl = serverUrl.trim()) }
                             },

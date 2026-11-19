@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 语音模式：录音（系统内录需要它，麦克风兜底同样需要） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <application
         android:name=".app.HanakoApplication"
@@ -46,6 +49,12 @@
             android:name=".platform.capture.shizuku.ShizukuPermissionActivity"
             android:exported="false"
             android:theme="@style/Theme.Hanako.Transparent" />
+        <!-- 只系统内录要的一次性授权：录屏/录音弹窗，用户允许后自动开始录音 -->
+        <activity
+            android:name=".platform.capture.projection.AudioProjectionPermissionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.Hanako.Transparent" />
         <activity
             android:name=".app.MainActivity"
             android:exported="true"
@@ -81,6 +90,20 @@
             android:name=".platform.capture.projection.MediaProjectionForegroundService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
+        <!-- 仅录音期间存活，用于在 Android 14+ 拿到麦克风访问资格 -->
+        <service
+            android:name=".core.audio.AudioCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- 透明中转页：悬浮球是服务，只能靠 Activity 申请运行时权限 -->
+        <activity
+            android:name=".core.audio.AudioPermissionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
         <!-- 仅用于提供 TYPE_ACCESSIBILITY_OVERLAY 窗口令牌，不读取界面内容 -->
         <service

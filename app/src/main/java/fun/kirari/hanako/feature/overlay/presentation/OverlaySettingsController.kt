@@ -63,7 +63,8 @@ internal class OverlaySettingsController(
                 current.copy(
                     processingRoute = when (current.processingRoute) {
                         ProcessingRoute.OCR_THEN_LLM -> ProcessingRoute.MULTIMODAL_DIRECT
-                        ProcessingRoute.MULTIMODAL_DIRECT -> ProcessingRoute.OCR_THEN_LLM
+                        ProcessingRoute.MULTIMODAL_DIRECT -> ProcessingRoute.AUDIO_AND_SCREEN
+                        ProcessingRoute.AUDIO_AND_SCREEN -> ProcessingRoute.OCR_THEN_LLM
                     }
                 )
             }

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -24,9 +25,11 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -113,7 +116,7 @@ private fun HeroHeader(overlayEnabled: Boolean) {
             }
             Column {
                 Text(
-                    "Hanako AI",
+                    "HanakoAI-EX",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Black,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -186,11 +189,16 @@ private fun ProcessingRouteSelector(
         ) {
             ProcessingRoute.entries.forEach { item ->
                 val isSelected = route == item
+                val (title, subtitle, icon) = when (item) {
+                    ProcessingRoute.OCR_THEN_LLM -> Triple("OCR 模式", "提取文字后分析", Icons.Default.Language)
+                    ProcessingRoute.MULTIMODAL_DIRECT -> Triple("多模态视觉", "直接分析全屏幕", Icons.Default.AutoAwesome)
+                    ProcessingRoute.AUDIO_AND_SCREEN -> Triple("语音+画面", "录音结合截图", Icons.Default.Mic)
+                }
                 ModeSelectorItem(
                     modifier = Modifier.weight(1f),
-                    title = if (item == ProcessingRoute.OCR_THEN_LLM) "OCR 模式" else "多模态视觉",
-                    subtitle = if (item == ProcessingRoute.OCR_THEN_LLM) "提取文字后分析" else "直接分析全屏幕",
-                    icon = if (item == ProcessingRoute.OCR_THEN_LLM) Icons.Default.Language else Icons.Default.AutoAwesome,
+                    title = title,
+                    subtitle = subtitle,
+                    icon = icon,
                     isSelected = isSelected,
                     onClick = { onSelectRoute(item) }
                 )
@@ -283,11 +291,72 @@ private fun HeroActions(
             }
         }
 
+        if (hasOverlayPermission && !overlayEnabled) {
+            StartGestureHint()
+        }
+
         HeroHint(
             hasOverlayPermission = hasOverlayPermission,
             captureMethod = captureMethod,
             overlayEnabled = overlayEnabled,
             staticModeEnabled = staticModeEnabled
+        )
+    }
+}
+
+/**
+ * 启动手势提示。
+ *
+ * 同一个按钮两种行为：短按进普通模式（作答会弹面板），长按进自动模式（不弹面板，
+ * 答案直接落在悬浮球上或复制到剪贴板）。这两个行为差别很大，光靠一行小字说明不够，
+ * 所以在按钮正下方单独给一条提示。
+ */
+@Composable
+private fun StartGestureHint() {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.08f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.TouchApp,
+                contentDescription = null,
+                modifier = Modifier.size(15.dp),
+                tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+            )
+            GestureHintItem(action = "短按", result = "弹窗作答")
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .height(14.dp)
+                    .background(MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.2f))
+            )
+            GestureHintItem(action = "长按", result = "自动模式 · 不弹窗")
+        }
+    }
+}
+
+@Composable
+private fun GestureHintItem(action: String, result: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Text(
+            text = action,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onPrimaryContainer
+        )
+        Text(
+            text = result,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
         )
     }
 }
@@ -332,18 +401,18 @@ private fun HeroHint(
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
             !overlayEnabled -> {
             if (staticModeEnabled) {
-                "提示：静态模式已开启，点击启动直接进入自动模式；悬浮球双击展开快捷菜单；Android 14+ 首次会弹出截屏授权。"
+                "提示：静态模式已开启，点击启动直接进入自动模式（不弹窗）；悬浮球双击展开快捷菜单；Android 14+ 首次会弹出截屏授权。"
             } else {
-                "提示：点击启动进入普通模式，长按启动进入自动模式；悬浮球双击展开快捷菜单；Android 14+ 首次会弹出截屏授权。"
+                "提示：短按启动进入普通模式（作答弹窗），长按启动进入自动模式（不弹窗）；悬浮球双击展开快捷菜单；Android 14+ 首次会弹出截屏授权。"
             }
         }
         captureMethod == ScreenCaptureMethod.SHIZUKU_ADB && !overlayEnabled ->
             "提示：当前使用 Shizuku 路线。启动时会先申请 Shizuku 授权，后续截图走 shell screencap；悬浮球双击展开快捷菜单。"
         !overlayEnabled -> {
             if (staticModeEnabled) {
-                "静态模式已开启，点击启动直接进入自动模式；悬浮球双击展开快捷菜单。"
+                "静态模式已开启，点击启动直接进入自动模式（不弹窗）；悬浮球双击展开快捷菜单。"
             } else {
-                "点击启动进入普通模式，长按启动进入自动模式；悬浮球双击展开快捷菜单。"
+                "短按启动进入普通模式（作答弹窗），长按启动进入自动模式（不弹窗）；悬浮球双击展开快捷菜单。"
             }
         }
         else -> null

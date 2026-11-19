@@ -1,7 +1,8 @@
 package `fun`.kirari.hanako.feature.overlay.service
 
+import `fun`.kirari.hanako.feature.overlay.window.BubbleGestureSink
 import `fun`.kirari.hanako.feature.overlay.window.BubbleMenuController
-import `fun`.kirari.hanako.feature.overlay.window.BubbleWindowController
+import `fun`.kirari.hanako.feature.overlay.window.OverlayBubbleCoordinator
 import `fun`.kirari.hanako.feature.overlay.window.OverlayWindowHost
 import `fun`.kirari.hanako.feature.overlay.window.PanelWindowController
 import `fun`.kirari.hanako.feature.overlay.presentation.OverlayViewModel
@@ -9,6 +10,7 @@ import `fun`.kirari.hanako.feature.overlay.OverlayDependencies
 import `fun`.kirari.hanako.feature.overlay.OverlayDependenciesProvider
 import `fun`.kirari.hanako.platform.capture.CaptureLaunchMode
 import `fun`.kirari.hanako.platform.capture.CaptureLaunchContract
+import `fun`.kirari.hanako.feature.overlay.state.BubbleSlot
 import `fun`.kirari.hanako.feature.overlay.state.OverlayRuntimeState
 
 import android.app.Service
@@ -49,7 +51,7 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
 
     private lateinit var overlayViewModel: OverlayViewModel
     private lateinit var dependencies: OverlayDependencies
-    private var bubbleWindowController: BubbleWindowController? = null
+    private var bubbleCoordinator: OverlayBubbleCoordinator? = null
     private var panelWindowController: PanelWindowController? = null
     private var bubbleMenuController: BubbleMenuController? = null
     private var stateObserver: OverlayStateObserver? = null
@@ -76,34 +78,14 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
                 this,
                 OverlayViewModel.factory(applicationContext, dependencies)
             )[OverlayViewModel::class.java]
-            bubbleWindowController = BubbleWindowController(
+            bubbleCoordinator = OverlayBubbleCoordinator(
                 context = this,
                 windowManager = windowManager,
-                onSingleTap = overlayViewModel::handleSingleTap,
-                onDoubleTap = {
-                    val center = bubbleWindowController?.getBubbleCenter()
-                    if (center != null) {
-                        overlayViewModel.handleDoubleTap(center.first, center.second)
-                    } else {
-                        overlayViewModel.handleDoubleTap()
-                    }
-                    showMenuIfExpanded()
-                },
-                onLongPress = {
-                    val center = bubbleWindowController?.getBubbleCenter()
-                    if (center != null) {
-                        overlayViewModel.handleLongPress(center.first, center.second)
-                    } else {
-                        overlayViewModel.handleLongPress()
-                    }
-                    showMenuIfExpanded()
-                },
-                onLongPressHaptic = { vibrateShort() },
+                primarySink = gestureSink(BubbleSlot.PRIMARY),
+                secondarySink = gestureSink(BubbleSlot.SECONDARY),
+                settingsProvider = { overlayViewModel.uiState.value.settings },
                 isStaticModeEnabled = {
                     overlayViewModel.uiState.value.settings.automation.staticModeEnabled
-                },
-                bubbleAppearanceSettings = {
-                    overlayViewModel.uiState.value.settings.automation.bubbleAppearance
                 }
             )
             bubbleMenuController = BubbleMenuController(
@@ -130,12 +112,12 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
                 savedStateRegistryOwner = this,
                 viewModel = overlayViewModel
             )
-            val bubbleController = checkNotNull(bubbleWindowController)
+            val bubbles = checkNotNull(bubbleCoordinator)
             val panelController = checkNotNull(panelWindowController)
             stateObserver = OverlayStateObserver(
                 scope = serviceScope,
                 viewModel = overlayViewModel,
-                bubbleWindowController = bubbleController,
+                bubbles = bubbles,
                 panelWindowController = panelController
             )
             automationEffectObserver = OverlayAutomationEffectObserver(
@@ -151,7 +133,7 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
             OverlayRuntimeState.setRunning(true)
             createNotificationChannel()
             startForeground(NOTIFICATION_ID, buildNotification(dependencies.mainActivityIntent(this)))
-            bubbleController.show()
+            bubbles.attach()
             stateObserver?.start()
             automationEffectObserver?.start()
         }.onFailure {
@@ -181,8 +163,8 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
         bubbleMenuController = null
         panelWindowController?.dismiss()
         panelWindowController = null
-        bubbleWindowController?.destroy()
-        bubbleWindowController = null
+        bubbleCoordinator?.destroy()
+        bubbleCoordinator = null
         stateObserver?.stop()
         stateObserver = null
         automationEffectObserver?.stop()
@@ -195,6 +177,24 @@ class OverlayService : Service(), LifecycleOwner, ViewModelStoreOwner, SavedStat
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /** 把一颗球的手势接到 ViewModel 上，并把点击位置带给菜单。 */
+    private fun gestureSink(slot: BubbleSlot): BubbleGestureSink {
+        return BubbleGestureSink(
+            onSingleTap = { overlayViewModel.handleSingleTap(slot) },
+            onDoubleTap = {
+                val center = bubbleCoordinator?.centerOf(slot)
+                overlayViewModel.handleDoubleTap(center?.first ?: 0, center?.second ?: 0, slot)
+                showMenuIfExpanded()
+            },
+            onLongPress = {
+                val center = bubbleCoordinator?.centerOf(slot)
+                overlayViewModel.handleLongPress(center?.first ?: 0, center?.second ?: 0, slot)
+                showMenuIfExpanded()
+            },
+            onLongPressHaptic = { vibrateShort() }
+        )
+    }
 
     private fun showMenuIfExpanded() {
         val state = overlayViewModel.bubbleStateMachine.currentState

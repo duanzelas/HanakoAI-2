@@ -5,6 +5,7 @@ import `fun`.kirari.hanako.feature.settings.ui.settings.DeleteConfirmDialog
 
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,6 +19,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -40,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import `fun`.kirari.hanako.core.data.AppSettings
 import `fun`.kirari.hanako.core.data.KIRARI_PROVIDER_ID
 import `fun`.kirari.hanako.core.data.ModelProviderConfig
+import `fun`.kirari.hanako.core.data.ProviderPreset
 import `fun`.kirari.hanako.core.data.availableProviders
 import `fun`.kirari.hanako.core.data.displayName
 import `fun`.kirari.hanako.core.data.isProtectedKirariProvider
@@ -53,11 +57,12 @@ import kotlinx.coroutines.launch
 fun ProviderSettingsScreen(
     scrollRoute: String,
     settings: AppSettings,
-    onAddProvider: () -> Unit,
+    onAddProvider: (ProviderPreset) -> Unit,
     onDeleteProvider: (String) -> Unit,
     onOpenProvider: (String) -> Unit
 ) {
     var deleteTargetId by remember { mutableStateOf<String?>(null) }
+    var addMenuExpanded by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     RegisterScrollToTopHandler(route = scrollRoute) {
@@ -84,8 +89,29 @@ fun ProviderSettingsScreen(
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary
                 )
-                TextButton(onClick = onAddProvider) {
-                    Text("新增")
+                Box {
+                    TextButton(onClick = { addMenuExpanded = true }) {
+                        Text("新增")
+                    }
+                    DropdownMenu(
+                        expanded = addMenuExpanded,
+                        onDismissRequest = { addMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("DeepSeek（deepseek-flash）") },
+                            onClick = {
+                                addMenuExpanded = false
+                                onAddProvider(ProviderPreset.DEEPSEEK)
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("自定义提供方") },
+                            onClick = {
+                                addMenuExpanded = false
+                                onAddProvider(ProviderPreset.CUSTOM)
+                            }
+                        )
+                    }
                 }
             }
         }

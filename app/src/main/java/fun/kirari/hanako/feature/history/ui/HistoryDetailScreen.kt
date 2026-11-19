@@ -401,7 +401,9 @@ private fun historyMessageItemIndex(
 ): Int? {
     var index = 1 // header
     if (screenshots.isNotEmpty()) index++
-    if (result.route == `fun`.kirari.hanako.core.model.ProcessingRoute.OCR_THEN_LLM) {
+    if (result.route == `fun`.kirari.hanako.core.model.ProcessingRoute.OCR_THEN_LLM ||
+        result.route == `fun`.kirari.hanako.core.model.ProcessingRoute.AUDIO_AND_SCREEN
+    ) {
         if (messageId == "${result.id}:initial-question") return index
         index++
     }

@@ -30,6 +30,7 @@ internal fun automationActionLabel(result: ProcessingResult): String {
 internal fun ProcessingRoute.displayName(): String = when (this) {
     ProcessingRoute.OCR_THEN_LLM -> "OCR"
     ProcessingRoute.MULTIMODAL_DIRECT -> "多模态"
+    ProcessingRoute.AUDIO_AND_SCREEN -> "语音+画面"
 }
 
 internal fun formatHistoryDetailHeader(result: ProcessingResult): String {

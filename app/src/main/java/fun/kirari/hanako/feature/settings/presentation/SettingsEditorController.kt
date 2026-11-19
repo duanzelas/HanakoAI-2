@@ -11,9 +11,12 @@ import `fun`.kirari.hanako.core.data.KirariSettings
 import `fun`.kirari.hanako.core.data.ModelPurpose
 import `fun`.kirari.hanako.core.data.ModelProviderConfig
 import `fun`.kirari.hanako.core.data.ModelSelection
+import `fun`.kirari.hanako.core.data.ProviderPreset
+import `fun`.kirari.hanako.core.data.deepSeekProvider
 import `fun`.kirari.hanako.core.model.ProcessingRoute
 import `fun`.kirari.hanako.core.data.ScreenCaptureMethod
 import `fun`.kirari.hanako.core.data.SettingsRepository
+import `fun`.kirari.hanako.core.data.TranscriptionSettings
 import `fun`.kirari.hanako.core.data.WebSearchSettings
 import `fun`.kirari.hanako.core.data.availableProviders
 import `fun`.kirari.hanako.core.data.creatableProviderKinds
@@ -56,10 +59,13 @@ internal class SettingsEditorController(
         }
     }
 
-    fun addProvider() {
+    fun addProvider(preset: ProviderPreset = ProviderPreset.CUSTOM) {
         scope.launch {
             repository.update { current ->
-                val provider = ModelProviderConfig(name = "自定义提供方 ${current.providers.size + 1}")
+                val provider = when (preset) {
+                    ProviderPreset.CUSTOM -> ModelProviderConfig(name = "自定义提供方 ${current.providers.size + 1}")
+                    ProviderPreset.DEEPSEEK -> deepSeekProvider()
+                }
                 current.copy(
                     providers = current.providers + provider,
                     selectedProviderId = provider.id
@@ -202,6 +208,14 @@ internal class SettingsEditorController(
                 val updatedSettings = current.copy(kirari = transform(current.kirari))
                 AppDebugLogStore.i(tag, "updateKirariSettings serverUrl=${updatedSettings.kirari.serverUrl}")
                 updatedSettings
+            }
+        }
+    }
+
+    fun updateTranscriptionSettings(transform: (TranscriptionSettings) -> TranscriptionSettings) {
+        scope.launch {
+            repository.update { current ->
+                current.copy(transcription = transform(current.transcription))
             }
         }
     }
