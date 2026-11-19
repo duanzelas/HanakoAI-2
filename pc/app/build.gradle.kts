@@ -33,12 +33,12 @@ compose.desktop {
                 arrayOf(TargetFormat.Exe)
             }
             targetFormats(*formats)
-            packageName = "HanakoPC"
-            packageVersion = "0.0.20"
+            packageName = "HanakoAI-EX"
+            packageVersion = "0.0.28"
             // jpackage 在中文 Windows 上会用系统 GBK 解码这些字段，
             // 非 ASCII 会抛 MalformedInputException("Input length = 1")，这里必须纯英文。
-            description = "Hanako PC - desktop AI assistant (preview)"
-            vendor = "Kirari"
+            description = "HanakoAI-EX PC - desktop AI assistant (preview)"
+            vendor = "duanzelas"
         }
     }
 }

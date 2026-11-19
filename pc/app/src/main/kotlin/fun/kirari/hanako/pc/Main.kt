@@ -51,6 +51,8 @@ fun main(args: Array<String>) {
     // 无界面自检：验证依赖在运行时加载正常，便于命令行冒烟测试
     // gradlew :app:run --args="--smoke"
     if (args.contains("--smoke")) {
+        println("app      = ${PcInfo.APP_NAME} ${PcInfo.VERSION}")
+        println("repo     = ${PcInfo.REPO_URL}")
         println("jvm      = ${System.getProperty("java.version")}")
         println("providers= ${ProviderKind.entries.size}")
         println("parser   = '答案：ABD' -> ${AnswerParser.lettersOf("答案：ABD")}")
@@ -111,7 +113,7 @@ private fun MainWindow(state: AppState, onExit: () -> Unit) {
             if (state.tray?.isAvailable == true) state.showMain = false else onExit()
         },
         visible = state.showMain,
-        title = "Hanako PC 0.0.20（预览）",
+        title = "${PcInfo.APP_NAME} ${PcInfo.VERSION}（预览）",
         state = rememberWindowState(width = 1000.dp, height = 700.dp)
     ) {
         MaterialTheme {
@@ -314,6 +316,37 @@ private fun ConfigPane(state: AppState) {
             label = { Text("System Prompt") },
             minLines = 3,
             maxLines = 6
+        )
+
+        Spacer(Modifier.height(8.dp))
+        AboutBlock()
+    }
+}
+
+/**
+ * 版本与仓库入口。
+ *
+ * 桌面端没有「设置 → 更多」那一层，所以直接放配置面板底部：
+ * 用户报问题时能一眼看到版本号，也能点开仓库对照更新日志。
+ */
+@Composable
+private fun AboutBlock() {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text("关于", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "${PcInfo.APP_NAME} ${PcInfo.VERSION}（预览）",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text(
+            text = PcInfo.REPO_LABEL,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clickable { PcInfo.openRepo() }
+        )
+        Text(
+            text = "点击地址可在浏览器中打开源码与更新日志",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

@@ -1,4 +1,4 @@
-# Hanako PC（预览）
+# HanakoAI-EX PC（预览）
 
 桌面端是独立构建，**不参与**根目录的 Android 构建（`settings.gradle.kts` 里没有 `include(":pc")`），
 所以引入 Compose Desktop 不会给 APK 带进任何多余依赖。
@@ -14,6 +14,8 @@
 - **剪贴板取图**：托菜单项或界面按钮，支持剪贴板位图与图片文件
 - **答案浮窗**：右下角浮出字母小球，点击复制完整答案，15 秒后自动消失
 - 配置持久化到 `~/.hanako-pc/config.properties`（明文，仅本机）
+- 配置面板底部有「关于」：显示当前版本号，点仓库地址用浏览器打开
+  `https://github.com/duanzelas/HanakoAI-EX`
 
 还没做：历史记录、Markdown/LaTeX 渲染、多显示器下按屏幕分别框选。
 
@@ -85,8 +87,11 @@ cd pc
 
 | 路径 | 大小 | 说明 |
 |---|---|---|
-| `app/build/compose/binaries/main/app/HanakoPC/HanakoPC.exe` | 整目录 115MB | 双击即用，内含精简 JRE，目标机不用装 Java |
-| `app/build/compose/binaries/main/msi/HanakoPC-0.0.20.msi` | 58MB | 安装包，装完有开始菜单项 |
+| `app/build/compose/binaries/main/app/HanakoAI-EX/HanakoAI-EX.exe` | 整目录 115MB | 双击即用，内含精简 JRE，目标机不用装 Java |
+| `app/build/compose/binaries/main/msi/HanakoAI-EX-0.0.28.msi` | 58MB | 安装包，装完有开始菜单项 |
+
+版本号在两处，必须一起改：`PcInfo.VERSION`（窗口标题与「关于」显示）和
+`pc/app/build.gradle.kts` 的 `packageVersion`（安装包版本）。
 
 两个打包坑（都已在构建脚本里处理）：
 
