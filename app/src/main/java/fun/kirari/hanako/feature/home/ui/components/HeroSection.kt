@@ -116,7 +116,7 @@ private fun HeroHeader(overlayEnabled: Boolean) {
             }
             Column {
                 Text(
-                    "Hanako AI",
+                    "HanakoAI-EX",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Black,
                     color = MaterialTheme.colorScheme.onPrimaryContainer

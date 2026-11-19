@@ -89,7 +89,8 @@ Android 悬浮窗 AI 客户端，把「截屏 → 识题 → 解题 → 复制/�
 Lite 与 Full 的唯一区别是**是否内置本地 OCR**。ML Kit 不支持 LaTeX 公式识别，
 所以数学题还是建议走云端 OCR / 多模态模型 —— 没有特殊需求选 Lite 就行。
 
-> APK 的桌面名称仍显示为 **Hanako**，包名沿用 `fun.kirari.hanako`，这样可以覆盖上游版本直接升级，不用卸载重装。
+> 桌面名称从 v0.0.27 起显示为 **HanakoAI-EX**，包名仍沿用 `fun.kirari.hanako`，
+> 所以可以直接覆盖安装上游或旧版本，不用卸载重装（数据与设置都保留）。
 
 ## 使用方式
 
@@ -231,9 +232,9 @@ kirari-llm-core/    多提供方 LLM 适配与工具调用格式
 kirari-auth-core/   OIDC PKCE 登录
 ```
 
-分支说明：
+分支说明（**GitHub 默认分支为 `pe`**）：
 
-- `pe`：当前 Android 客户端主线（本文档描述的内容）
+- `pe`：当前 Android 客户端主线（本文档描述的内容，默认分支）
 - `hanako-PC`：实验性的 PC 托盘版（Compose Desktop，全局热键 + 固定选区截图）
 - `main`：沿用上游基线
 

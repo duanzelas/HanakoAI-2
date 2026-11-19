@@ -100,7 +100,7 @@ internal fun HistoryChatTurn(
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             UserMessageBubble(turn = turn, onQuoteClick = onQuoteClick)
             ResultContentCard(
-                title = "Hanako",
+                title = "HanakoAI-EX",
                 supportingText = turn.modelSummary.takeIf(String::isNotBlank),
                 modifier = Modifier.fillMaxWidth(),
                 actions = {

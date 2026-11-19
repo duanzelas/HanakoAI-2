@@ -94,7 +94,7 @@ internal fun ResultOverlaySheet(
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             ) {
                 SheetTitleRow(
-                    title = { Text("Hanako") },
+                    title = { Text("HanakoAI-EX") },
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier
                         .fillMaxWidth()
