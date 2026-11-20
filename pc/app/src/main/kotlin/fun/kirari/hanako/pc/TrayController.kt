@@ -27,6 +27,10 @@ class TrayController(
 
     private var trayIcon: TrayIcon? = null
     private var available = false
+    @Volatile
+    private var recording = false
+    private var lastLetters = ""
+    private var lastTooltip = "HanakoAI-EX PC · 就绪"
 
     fun install(): Boolean {
         if (!SystemTray.isSupported()) return false
@@ -62,11 +66,31 @@ class TrayController(
 
     /** 更新托盘图标与提示；letters 为空时回到默认图标。 */
     fun update(letters: String, tooltip: String) {
+        lastLetters = letters
+        lastTooltip = tooltip
         val icon = trayIcon ?: return
         SwingUtilities.invokeLater {
             runCatching {
                 icon.image = render(letters)
                 icon.toolTip = tooltip.take(120)
+            }
+        }
+    }
+
+    /**
+     * 录音状态：图标整体变红。
+     *
+     * 录音时用户往往已经切到别的窗口看题，托盘是唯一能确认「正在录」的地方，
+     * 所以红色优先于答案字母，比在提示文字里写一句更直观。
+     */
+    fun setRecording(value: Boolean) {
+        if (recording == value) return
+        recording = value
+        val icon = trayIcon ?: return
+        SwingUtilities.invokeLater {
+            runCatching {
+                icon.image = render(lastLetters)
+                icon.toolTip = if (value) "HanakoAI-EX PC · 录音中" else lastTooltip.take(120)
             }
         }
     }
@@ -91,6 +115,15 @@ class TrayController(
         try {
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
             g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
+
+            if (recording) {
+                // 红底 + 白色实心圆点，缩到 16px 也能一眼看出在录
+                g.color = Color(0xE5, 0x39, 0x35)
+                g.fillRoundRect(4, 4, size - 8, size - 8, 22, 22)
+                g.color = Color.WHITE
+                g.fillOval(23, 23, 18, 18)
+                return image
+            }
 
             if (letters.isBlank()) {
                 g.color = Color(0x2B, 0x31, 0x38)

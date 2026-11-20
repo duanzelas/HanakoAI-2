@@ -66,6 +66,21 @@ enum class ProviderPreset(
     )
 }
 
+/**
+ * 录音音源。
+ *
+ * PC 端没有 AudioPlaybackCapture，系统内录要靠声卡的「立体声混音 / Stereo Mix」这类
+ * 回环输入设备（Realtek 驱动自带，默认常被禁用）。找不到设备时明确报错让人去启用，
+ * 不静默退回麦克风——否则录进来的全是环境噪音，用户根本无从排查。
+ */
+enum class AudioSource(val label: String) {
+    /** 系统声音（立体声混音 / 回环设备）。 */
+    SYSTEM("系统声音"),
+
+    /** 麦克风。 */
+    MIC("麦克风")
+}
+
 /** 联网搜索引擎，字段格式对齐各家官方 API。 */
 enum class SearchKind(val label: String) {
     TAVILY("Tavily"),
@@ -93,6 +108,8 @@ data class PcSettings(
     val region: Region? = null,
 
     // ---- 语音转写 ----
+    /** 录音音源：默认系统声音，找不到设备时会在录音前明确报错。 */
+    val audioSource: AudioSource = AudioSource.SYSTEM,
     /** 转写服务地址，默认 DeepSeek 官方 ASR。 */
     val transcriptionBaseUrl: String = DEFAULT_TRANSCRIPTION_BASE_URL,
     /** 转写 Key；留空时复用 [apiKey]（DeepSeek 的 chat 与 ASR 是同一个 Key）。 */
@@ -134,6 +151,7 @@ data class PcSettings(
             props["textModel"] = textModel
             props["route"] = route.name
             props["systemPrompt"] = systemPrompt
+            props["audioSource"] = audioSource.name
             props["transcriptionBaseUrl"] = transcriptionBaseUrl
             props["transcriptionApiKey"] = transcriptionApiKey
             props["transcriptionPath"] = transcriptionPath
@@ -184,6 +202,9 @@ data class PcSettings(
                     ?: SolveRoute.MULTIMODAL_DIRECT,
                 systemPrompt = props.getProperty("systemPrompt") ?: DEFAULT_SOLVE_PROMPT,
                 region = readRegion(props),
+                audioSource = props.getProperty("audioSource")
+                    ?.let { runCatching { AudioSource.valueOf(it) }.getOrNull() }
+                    ?: AudioSource.SYSTEM,
                 transcriptionBaseUrl = props.getProperty("transcriptionBaseUrl")
                     ?: DEFAULT_TRANSCRIPTION_BASE_URL,
                 transcriptionApiKey = props.getProperty("transcriptionApiKey").orEmpty(),

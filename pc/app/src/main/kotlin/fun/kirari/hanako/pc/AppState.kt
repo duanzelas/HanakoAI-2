@@ -56,6 +56,8 @@ class AppState(private val scope: CoroutineScope) {
     var bubbleVisible by mutableStateOf(false)
     /** 主设置窗口是否显示，关闭时缩到托盘 */
     var showMain by mutableStateOf(true)
+    /** 设置二级窗口（模型配置、音源、搜索等）是否显示 */
+    var showSettings by mutableStateOf(false)
     /** 正在框选 */
     var selecting by mutableStateOf(false)
 
@@ -148,13 +150,30 @@ class AppState(private val scope: CoroutineScope) {
     /** 开始录音；到 [PcSettings.maxRecordSeconds] 会自动结束并作答。 */
     fun startRecording() {
         if (busy || recording) return
-        if (!recorder.start()) {
-            status = "打不开麦克风：被其他程序占用，或系统没有输入设备"
-            return
+        when (val result = recorder.start(settings.audioSource)) {
+            RecordStart.Ok -> Unit
+            RecordStart.NoSystemDevice -> {
+                status = "系统内录不可用：没有找到「立体声混音」设备。" +
+                    "到 声音设置 → 录制 → 右键「显示禁用的设备」→ 启用「立体声混音」，或改用麦克风"
+                return
+            }
+            RecordStart.NoMicrophone -> {
+                status = "打不开麦克风：被其他程序占用，或系统没有输入设备"
+                return
+            }
+            is RecordStart.Failed -> {
+                status = "录音设备打不开：${result.message}"
+                return
+            }
         }
         recording = true
         recordSeconds = 0
-        status = "录音中… 再按一次结束"
+        tray?.setRecording(true)
+        status = if (settings.audioSource == AudioSource.SYSTEM) {
+            "正在录系统声音… 再按一次结束"
+        } else {
+            "正在录麦克风… 再按一次结束"
+        }
         recordJob?.cancel()
         recordJob = scope.launch {
             while (isActive && recording) {
@@ -173,6 +192,7 @@ class AppState(private val scope: CoroutineScope) {
     fun finishRecording() {
         if (!recording) return
         recording = false
+        tray?.setRecording(false)
         recordJob?.cancel()
         recordJob = null
         val clip = recorder.stop()
@@ -225,6 +245,7 @@ class AppState(private val scope: CoroutineScope) {
     fun cancelRecording() {
         if (!recording) return
         recording = false
+        tray?.setRecording(false)
         recordJob?.cancel()
         recordJob = null
         recorder.cancel()

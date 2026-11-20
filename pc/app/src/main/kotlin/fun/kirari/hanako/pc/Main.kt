@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -16,8 +17,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -42,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -54,7 +56,7 @@ import `fun`.kirari.llm.core.ProviderKind
 import kotlinx.coroutines.delay
 
 fun main(args: Array<String>) {
-    // 无界面自检：验证依赖在运行时加载正常，便于命令行冒烟测试
+    // 无界面自检：验证依赖与设备在运行时可用
     // gradlew :app:run --args="--smoke"
     if (args.contains("--smoke")) {
         println("app      = ${PcInfo.APP_NAME} ${PcInfo.VERSION}")
@@ -63,13 +65,21 @@ fun main(args: Array<String>) {
         println("providers= ${ProviderKind.entries.size}")
         println("presets  = ${ProviderPreset.entries.joinToString { it.label }}")
         println("routes   = ${SolveRoute.entries.joinToString { it.name }}")
+        println("sources  = ${AudioSource.entries.joinToString { it.label }}")
         println("search   = ${SearchKind.entries.joinToString { it.label }}")
         println("parser   = '答案：ABD' -> ${AnswerParser.lettersOf("答案：ABD")}")
         println("parser   = '选 B'     -> ${AnswerParser.lettersOf("选 B")}")
         println("parser   = '今天天气' -> '${AnswerParser.lettersOf("今天天气不错")}'")
-        println("markdown = ${runCatching { "ok" }.getOrDefault("n/a")}")
+
         val recorder = PcRecorder()
-        println("mic      = ${if (recorder.start()) { recorder.cancel(); "可用" } else "不可用（无输入设备或被占用）"}")
+        val micOk = recorder.start(AudioSource.MIC) == RecordStart.Ok
+        if (micOk) recorder.cancel()
+        println("mic      = ${if (micOk) "可用" else "不可用（无输入设备或被占用）"}")
+        val devices = PcRecorder.systemDevices()
+        println("system   = ${devices.joinToString().ifBlank { "未找到回环设备（需在声音设置里启用「立体声混音」）" }}")
+        val sysStart = if (devices.isEmpty()) RecordStart.NoSystemDevice else recorder.start(AudioSource.SYSTEM)
+        if (sysStart == RecordStart.Ok) recorder.cancel()
+        println("sysRecord= ${if (sysStart == RecordStart.Ok) "可用" else "不可用：$sysStart"}")
 
         val hotkeys = HotkeyController({}, {}, {})
         println("hotkeys  = ${hotkeys.install()}")
@@ -78,6 +88,8 @@ fun main(args: Array<String>) {
         val tray = TrayController({}, {}, {}, {}, {}, {})
         println("tray     = ${tray.install()}")
         tray.update("ABD", "答案 ABD")
+        tray.setRecording(true)
+        tray.setRecording(false)
         tray.uninstall()
         return
     }
@@ -115,9 +127,12 @@ fun main(args: Array<String>) {
         }
 
         MainWindow(state) { exitApplication() }
+        SettingsWindow(state)
         BubbleWindow(state)
     }
 }
+
+// ---------------------------------------------------------------- 主窗口
 
 @Composable
 private fun MainWindow(state: AppState, onExit: () -> Unit) {
@@ -128,14 +143,17 @@ private fun MainWindow(state: AppState, onExit: () -> Unit) {
         },
         visible = state.showMain,
         title = "${PcInfo.APP_NAME} ${PcInfo.VERSION}（预览）",
-        state = rememberWindowState(width = 1060.dp, height = 740.dp)
+        state = rememberWindowState(width = 1020.dp, height = 720.dp)
     ) {
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
-                Row(modifier = Modifier.fillMaxSize()) {
-                    ConfigPane(state)
-                    VerticalLine()
-                    ResultPane(state)
+                Column(modifier = Modifier.fillMaxSize()) {
+                    TopBar(state)
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        OperationPane(state)
+                        VerticalLine()
+                        ResultPane(state)
+                    }
                 }
             }
         }
@@ -143,8 +161,427 @@ private fun MainWindow(state: AppState, onExit: () -> Unit) {
 }
 
 @Composable
+private fun TopBar(state: AppState) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "HanakoAI-EX",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Black
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "v${PcInfo.VERSION}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(16.dp))
+        Text(
+            state.status,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (state.letters.isNotBlank()) {
+            Spacer(Modifier.width(10.dp))
+            Text(
+                state.letters,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        RecordButton(state)
+        Spacer(Modifier.width(8.dp))
+        OutlinedButton(onClick = { state.showSettings = true }) { Text("设置") }
+    }
+    SectionDivider()
+}
+
+/** 顶栏的录音开关：录音中是红底白字并带计时，一眼能确认状态。 */
+@Composable
+private fun RecordButton(state: AppState) {
+    Button(
+        onClick = { state.toggleRecording() },
+        enabled = !state.busy,
+        colors = if (state.recording) {
+            ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+        } else {
+            ButtonDefaults.buttonColors()
+        }
+    ) {
+        Text(
+            if (state.recording) {
+                "■ 结束 " + formatSeconds(state.recordSeconds)
+            } else {
+                "● 录音"
+            }
+        )
+    }
+}
+
+// ---------------------------------------------------------------- 操作区
+
+@Composable
+private fun OperationPane(state: AppState) {
+    val settings = state.settings
+    val systemDevices = remember { PcRecorder.systemDevices() }
+
+    Column(
+        modifier = Modifier
+            .width(310.dp)
+            .fillMaxHeight()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("操作", style = MaterialTheme.typography.titleSmall)
+
+        Button(
+            onClick = { state.captureNow() },
+            enabled = !state.busy && !state.recording,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                if (settings.route == SolveRoute.AUDIO_AND_SCREEN) "按固定区域录音作答"
+                else "按固定区域截图作答"
+            )
+        }
+        OutlinedButton(
+            onClick = { state.startSelect() },
+            enabled = !state.busy && !state.recording,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("重新框选区域") }
+        OutlinedButton(
+            onClick = { state.captureClipboard() },
+            enabled = !state.busy && !state.recording,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("从剪贴板读图作答") }
+
+        Spacer(Modifier.height(6.dp))
+        SectionDivider()
+        Text("当前配置", style = MaterialTheme.typography.titleSmall)
+        InfoRow("处理方式", settings.route.label)
+        InfoRow("模型", settings.visionModel.ifBlank { "未配置" })
+        InfoRow("录音音源", settings.audioSource.label)
+        if (settings.audioSource == AudioSource.SYSTEM) {
+            Text(
+                text = if (systemDevices.isEmpty()) {
+                    "未找到「立体声混音」设备：到 声音设置 → 录制 → 右键「显示禁用的设备」→ 启用它，" +
+                        "或到设置里改用麦克风"
+                } else {
+                    "可用设备：" + systemDevices.joinToString()
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = if (systemDevices.isEmpty()) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+
+        Spacer(Modifier.height(6.dp))
+        SectionDivider()
+        Text("截图区域", style = MaterialTheme.typography.titleSmall)
+        val region = settings.region
+        Text(
+            text = if (region == null) {
+                "未框选。按 Ctrl+Alt+R 或点「重新框选区域」。"
+            } else {
+                "${region.width} × ${region.height} @ (${region.x}, ${region.y})\n位置固定，之后每次截图都取这里"
+            },
+            style = MaterialTheme.typography.bodySmall
+        )
+
+        Spacer(Modifier.height(6.dp))
+        SectionDivider()
+        Text("快捷键", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "Ctrl+Alt+S 按固定区域作答\n" +
+                "Ctrl+Alt+R 重新框选区域\n" +
+                "Ctrl+Alt+V 开始/结束录音",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text(
+            text = buildString {
+                append("托盘：")
+                append(if (state.tray?.isAvailable == true) "已启用" else "当前系统不支持")
+                append("\n全局热键：")
+                append(if (state.hotkeyAvailable) "已注册" else "注册失败（可能被杀毒软件占用）")
+                append("\n配置：~/.hanako-pc/config.properties")
+                append("\n历史：~/.hanako-pc/history.json")
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.weight(1f))
+        Text(value, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+    }
+}
+
+// ---------------------------------------------------------------- 设置窗口（二级）
+
+@Composable
+private fun SettingsWindow(state: AppState) {
+    Window(
+        onCloseRequest = { state.showSettings = false },
+        visible = state.showSettings,
+        title = "设置 · ${PcInfo.APP_NAME}",
+        state = rememberWindowState(width = 560.dp, height = 760.dp)
+    ) {
+        MaterialTheme {
+            Surface(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("设置", style = MaterialTheme.typography.titleLarge)
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { state.showSettings = false }) { Text("关闭") }
+                    }
+                    ModelSection(state)
+                    SectionDivider()
+                    RouteSection(state)
+                    SectionDivider()
+                    VoiceSection(state)
+                    SectionDivider()
+                    SearchSection(state)
+                    SectionDivider()
+                    PromptSection(state)
+                    SectionDivider()
+                    AboutBlock()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelSection(state: AppState) {
+    val settings = state.settings
+    var kindExpanded by remember { mutableStateOf(false) }
+
+    Text("模型配置", style = MaterialTheme.typography.titleSmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        ProviderPreset.entries.forEach { preset ->
+            FilterChip(
+                selected = settings.baseUrl.trim() == preset.baseUrl &&
+                    settings.visionModel == preset.visionModel,
+                onClick = { state.applyPreset(preset) },
+                label = { Text(preset.label, fontSize = 12.sp) }
+            )
+        }
+    }
+    Box {
+        OutlinedButton(onClick = { kindExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(kindLabel(settings.kind))
+        }
+        DropdownMenu(expanded = kindExpanded, onDismissRequest = { kindExpanded = false }) {
+            ProviderKind.entries.forEach { kind ->
+                DropdownMenuItem(
+                    text = { Text(kindLabel(kind)) },
+                    onClick = {
+                        state.updateSettings { it.copy(kind = kind) }
+                        kindExpanded = false
+                    }
+                )
+            }
+        }
+    }
+    OutlinedTextField(
+        value = settings.baseUrl,
+        onValueChange = { value -> state.updateSettings { it.copy(baseUrl = value) } },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Base URL") },
+        singleLine = true
+    )
+    OutlinedTextField(
+        value = settings.apiKey,
+        onValueChange = { value -> state.updateSettings { it.copy(apiKey = value) } },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("API Key") },
+        singleLine = true
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = settings.visionModel,
+            onValueChange = { value -> state.updateSettings { it.copy(visionModel = value) } },
+            modifier = Modifier.weight(1f),
+            label = { Text("视觉模型") },
+            singleLine = true
+        )
+        OutlinedTextField(
+            value = settings.textModel,
+            onValueChange = { value -> state.updateSettings { it.copy(textModel = value) } },
+            modifier = Modifier.weight(1f),
+            label = { Text("文本模型") },
+            singleLine = true
+        )
+    }
+}
+
+@Composable
+private fun RouteSection(state: AppState) {
+    val settings = state.settings
+    Text("处理方式", style = MaterialTheme.typography.titleSmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        SolveRoute.entries.forEach { route ->
+            FilterChip(
+                selected = settings.route == route,
+                onClick = { state.updateSettings { it.copy(route = route) } },
+                label = {
+                    Text(
+                        text = when (route) {
+                            SolveRoute.MULTIMODAL_DIRECT -> "多模态"
+                            SolveRoute.OCR_THEN_LLM -> "OCR→LLM"
+                            SolveRoute.AUDIO_AND_SCREEN -> "语音+画面"
+                        },
+                        fontSize = 12.sp
+                    )
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun VoiceSection(state: AppState) {
+    val settings = state.settings
+    val systemDevices = remember { PcRecorder.systemDevices() }
+
+    Text("语音与录音", style = MaterialTheme.typography.titleSmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        AudioSource.entries.forEach { source ->
+            FilterChip(
+                selected = settings.audioSource == source,
+                onClick = { state.updateSettings { it.copy(audioSource = source) } },
+                label = { Text(source.label, fontSize = 12.sp) }
+            )
+        }
+    }
+    Text(
+        text = when {
+            settings.audioSource == AudioSource.MIC ->
+                "录麦克风：会收到环境噪音，适合没有回环设备的机器。"
+
+            systemDevices.isEmpty() ->
+                "没有找到「立体声混音」：到 声音设置 → 录制 → 右键「显示禁用的设备」→ 启用「立体声混音」。" +
+                    "部分机器需要装虚拟声卡（如 VB-Cable）才能内录。"
+
+            else -> "系统内录设备：" + systemDevices.joinToString()
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = if (settings.audioSource == AudioSource.SYSTEM && systemDevices.isEmpty()) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    )
+    OutlinedTextField(
+        value = settings.transcriptionBaseUrl,
+        onValueChange = { value -> state.updateSettings { it.copy(transcriptionBaseUrl = value) } },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("转写地址") },
+        supportingText = { Text("默认 DeepSeek 官方 ASR（/tools/asr）", fontSize = 11.sp) },
+        singleLine = true
+    )
+    OutlinedTextField(
+        value = settings.transcriptionApiKey,
+        onValueChange = { value -> state.updateSettings { it.copy(transcriptionApiKey = value) } },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("转写 API Key（留空复用主 Key）") },
+        singleLine = true
+    )
+    OutlinedTextField(
+        value = settings.maxRecordSeconds.toString(),
+        onValueChange = { value ->
+            val seconds = value.filter { it.isDigit() }.take(3).toIntOrNull()
+            if (seconds != null) state.updateSettings { it.copy(maxRecordSeconds = seconds) }
+        },
+        modifier = Modifier.width(180.dp),
+        label = { Text("录音上限（秒）") },
+        singleLine = true
+    )
+}
+
+@Composable
+private fun SearchSection(state: AppState) {
+    val settings = state.settings
+    var engineExpanded by remember { mutableStateOf(false) }
+
+    Text("联网搜索", style = MaterialTheme.typography.titleSmall)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(
+            checked = settings.searchEnabled,
+            onCheckedChange = { enabled -> state.updateSettings { it.copy(searchEnabled = enabled) } }
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("作答前先搜一下题目", style = MaterialTheme.typography.bodySmall)
+    }
+    if (settings.searchEnabled) {
+        Box {
+            OutlinedButton(onClick = { engineExpanded = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(settings.searchKind.label)
+            }
+            DropdownMenu(expanded = engineExpanded, onDismissRequest = { engineExpanded = false }) {
+                SearchKind.entries.forEach { kind ->
+                    DropdownMenuItem(
+                        text = { Text(kind.label) },
+                        onClick = {
+                            state.updateSettings { it.copy(searchKind = kind) }
+                            engineExpanded = false
+                        }
+                    )
+                }
+            }
+        }
+        OutlinedTextField(
+            value = settings.searchApiKey,
+            onValueChange = { value -> state.updateSettings { it.copy(searchApiKey = value) } },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("搜索 API Key") },
+            singleLine = true
+        )
+    }
+}
+
+@Composable
+private fun PromptSection(state: AppState) {
+    val settings = state.settings
+    Text("System Prompt", style = MaterialTheme.typography.titleSmall)
+    OutlinedTextField(
+        value = settings.systemPrompt,
+        onValueChange = { value -> state.updateSettings { it.copy(systemPrompt = value) } },
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 4,
+        maxLines = 8
+    )
+}
+
+// ---------------------------------------------------------------- 浮窗与结果
+
+@Composable
 private fun BubbleWindow(state: AppState) {
-    // 托盘旁边的答案浮窗：只显示字母，点一下把完整答案复制走
     LaunchedEffect(state.bubbleVisible, state.answer) {
         if (state.bubbleVisible) {
             delay(15_000)
@@ -207,248 +644,6 @@ private fun VerticalLine() {
     )
 }
 
-// ---------------------------------------------------------------- 左侧配置
-
-@Composable
-private fun ConfigPane(state: AppState) {
-    val settings = state.settings
-    var kindExpanded by remember { mutableStateOf(false) }
-    var engineExpanded by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .width(420.dp)
-            .fillMaxHeight()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text("模型配置", style = MaterialTheme.typography.titleMedium)
-
-        // 预设芯片：点一下把 Base URL 和模型名一起填好
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            ProviderPreset.entries.forEach { preset ->
-                FilterChip(
-                    selected = settings.baseUrl.trim() == preset.baseUrl &&
-                        settings.visionModel == preset.visionModel,
-                    onClick = { state.applyPreset(preset) },
-                    label = { Text(preset.label, fontSize = 12.sp) }
-                )
-            }
-        }
-
-        Box {
-            OutlinedButton(onClick = { kindExpanded = true }, modifier = Modifier.fillMaxWidth()) {
-                Text(kindLabel(settings.kind))
-            }
-            DropdownMenu(expanded = kindExpanded, onDismissRequest = { kindExpanded = false }) {
-                ProviderKind.entries.forEach { kind ->
-                    DropdownMenuItem(
-                        text = { Text(kindLabel(kind)) },
-                        onClick = {
-                            state.updateSettings { it.copy(kind = kind) }
-                            kindExpanded = false
-                        }
-                    )
-                }
-            }
-        }
-
-        OutlinedTextField(
-            value = settings.baseUrl,
-            onValueChange = { value -> state.updateSettings { it.copy(baseUrl = value) } },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Base URL") },
-            singleLine = true
-        )
-        OutlinedTextField(
-            value = settings.apiKey,
-            onValueChange = { value -> state.updateSettings { it.copy(apiKey = value) } },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("API Key") },
-            singleLine = true
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = settings.visionModel,
-                onValueChange = { value -> state.updateSettings { it.copy(visionModel = value) } },
-                modifier = Modifier.weight(1f),
-                label = { Text("视觉模型") },
-                singleLine = true
-            )
-            OutlinedTextField(
-                value = settings.textModel,
-                onValueChange = { value -> state.updateSettings { it.copy(textModel = value) } },
-                modifier = Modifier.weight(1f),
-                label = { Text("文本模型") },
-                singleLine = true
-            )
-        }
-
-        Text("处理方式", style = MaterialTheme.typography.titleSmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            SolveRoute.entries.forEach { route ->
-                FilterChip(
-                    selected = settings.route == route,
-                    onClick = { state.updateSettings { it.copy(route = route) } },
-                    label = {
-                        Text(
-                            text = when (route) {
-                                SolveRoute.MULTIMODAL_DIRECT -> "多模态"
-                                SolveRoute.OCR_THEN_LLM -> "OCR→LLM"
-                                SolveRoute.AUDIO_AND_SCREEN -> "语音+画面"
-                            },
-                            fontSize = 12.sp
-                        )
-                    }
-                )
-            }
-        }
-
-        // 录音作答：与模式无关，任何模式下都能录一段话再配当前画面
-        Button(
-            onClick = { state.toggleRecording() },
-            enabled = !state.busy,
-            modifier = Modifier.fillMaxWidth(),
-            colors = if (state.recording) {
-                ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-            } else {
-                ButtonDefaults.buttonColors()
-            }
-        ) {
-            Text(
-                if (state.recording) {
-                    "■ 结束并作答  " + formatSeconds(state.recordSeconds)
-                } else {
-                    "● 录音作答（Ctrl+Alt+V）"
-                }
-            )
-        }
-        if (state.recording) {
-            Text(
-                text = "上限 ${settings.maxRecordSeconds} 秒，到时会自动结束；录音期间请让题目声音继续播放",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
-            )
-        }
-
-        Text("截图区域", style = MaterialTheme.typography.titleSmall)
-        val region = settings.region
-        Text(
-            text = when {
-                region == null -> "未框选。按 Ctrl+Alt+R 或点下面的按钮框选一次。"
-                else -> "${region.width} × ${region.height} @ (${region.x}, ${region.y})" +
-                    " —— 位置固定，之后每次截图都取这里"
-            },
-            style = MaterialTheme.typography.bodySmall
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { state.startSelect() }) { Text("重新框选") }
-            Button(onClick = { state.captureNow() }, enabled = !state.busy && !state.recording) {
-                Text("立即作答")
-            }
-            OutlinedButton(onClick = { state.captureClipboard() }, enabled = !state.busy && !state.recording) {
-                Text("读剪贴板")
-            }
-        }
-
-        Spacer(Modifier.height(4.dp))
-        Text("快捷键", style = MaterialTheme.typography.titleSmall)
-        Text(
-            text = "Ctrl+Alt+S 按固定区域截图作答\n" +
-                "Ctrl+Alt+R 重新框选区域\n" +
-                "Ctrl+Alt+V 开始/结束录音作答",
-            style = MaterialTheme.typography.bodySmall
-        )
-
-        Spacer(Modifier.height(4.dp))
-        Text(
-            text = buildString {
-                append("托盘：")
-                append(
-                    if (state.tray?.isAvailable == true) "已启用，图标会显示答案字母"
-                    else "当前系统不支持托盘"
-                )
-                append("\n全局热键：")
-                append(if (state.hotkeyAvailable) "已注册" else "注册失败（可能被杀毒软件占用）")
-                append("\n配置：~/.hanako-pc/config.properties")
-                append("\n历史：~/.hanako-pc/history.json")
-            },
-            style = MaterialTheme.typography.bodySmall
-        )
-
-        Spacer(Modifier.height(4.dp))
-        SectionDivider()
-        Text("语音转写", style = MaterialTheme.typography.titleSmall)
-        OutlinedTextField(
-            value = settings.transcriptionBaseUrl,
-            onValueChange = { value -> state.updateSettings { it.copy(transcriptionBaseUrl = value) } },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("转写地址") },
-            supportingText = { Text("默认 DeepSeek 官方 ASR（/tools/asr）", fontSize = 11.sp) },
-            singleLine = true
-        )
-        OutlinedTextField(
-            value = settings.transcriptionApiKey,
-            onValueChange = { value -> state.updateSettings { it.copy(transcriptionApiKey = value) } },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("转写 API Key（留空复用主 Key）") },
-            singleLine = true
-        )
-
-        Spacer(Modifier.height(4.dp))
-        SectionDivider()
-        Text("联网搜索", style = MaterialTheme.typography.titleSmall)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(
-                checked = settings.searchEnabled,
-                onCheckedChange = { enabled -> state.updateSettings { it.copy(searchEnabled = enabled) } }
-            )
-            Spacer(Modifier.width(8.dp))
-            Text("作答前先搜一下题目", style = MaterialTheme.typography.bodySmall)
-        }
-        if (settings.searchEnabled) {
-            Box {
-                OutlinedButton(onClick = { engineExpanded = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(settings.searchKind.label)
-                }
-                DropdownMenu(expanded = engineExpanded, onDismissRequest = { engineExpanded = false }) {
-                    SearchKind.entries.forEach { kind ->
-                        DropdownMenuItem(
-                            text = { Text(kind.label) },
-                            onClick = {
-                                state.updateSettings { it.copy(searchKind = kind) }
-                                engineExpanded = false
-                            }
-                        )
-                    }
-                }
-            }
-            OutlinedTextField(
-                value = settings.searchApiKey,
-                onValueChange = { value -> state.updateSettings { it.copy(searchApiKey = value) } },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("搜索 API Key") },
-                singleLine = true
-            )
-        }
-
-        Spacer(Modifier.height(4.dp))
-        SectionDivider()
-        OutlinedTextField(
-            value = settings.systemPrompt,
-            onValueChange = { value -> state.updateSettings { it.copy(systemPrompt = value) } },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("System Prompt") },
-            minLines = 3,
-            maxLines = 6
-        )
-
-        Spacer(Modifier.height(8.dp))
-        AboutBlock()
-    }
-}
-
 @Composable
 private fun SectionDivider() {
     Box(
@@ -459,8 +654,6 @@ private fun SectionDivider() {
     )
 }
 
-// ---------------------------------------------------------------- 右侧结果
-
 private enum class RightTab { RESULT, HISTORY }
 
 @Composable
@@ -469,39 +662,22 @@ private fun ResultPane(state: AppState) {
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(state.status, style = MaterialTheme.typography.labelLarge)
-            Spacer(Modifier.width(12.dp))
-            if (state.letters.isNotBlank()) {
-                Text(
-                    state.letters,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-            Spacer(Modifier.weight(1f))
             TabButton("结果", tab == RightTab.RESULT) { tab = RightTab.RESULT }
             TabButton("历史 ${state.history.size}", tab == RightTab.HISTORY) { tab = RightTab.HISTORY }
-        }
-
-        // 版本切换：同一张图重新生成多次时，可以往回翻
-        if (state.versions.size > 1) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.weight(1f))
+            if (state.versions.size > 1) {
                 TextButton(
                     onClick = { state.showVersion(state.versionIndex - 1) },
                     enabled = state.versionIndex > 0
                 ) { Text("<") }
                 Text(
-                    "第 ${state.versionIndex + 1}/${state.versions.size} 个答案",
+                    "${state.versionIndex + 1}/${state.versions.size}",
                     style = MaterialTheme.typography.bodySmall
                 )
                 TextButton(
                     onClick = { state.showVersion(state.versionIndex + 1) },
                     enabled = state.versionIndex < state.versions.lastIndex
                 ) { Text(">") }
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = { state.regenerate() }, enabled = !state.busy && !state.recording) {
-                    Text("重新生成")
-                }
             }
         }
 
@@ -515,7 +691,7 @@ private fun ResultPane(state: AppState) {
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.ResultBody(state: AppState) {
+private fun ColumnScope.ResultBody(state: AppState) {
     Box(
         modifier = Modifier
             .weight(1f)
@@ -530,7 +706,7 @@ private fun androidx.compose.foundation.layout.ColumnScope.ResultBody(state: App
             else -> Text(
                 "Ctrl+Alt+S 按固定区域截图作答，Ctrl+Alt+V 录音后作答。\n" +
                     "答案会同时出现在托盘图标和右下角浮窗上。\n" +
-                    "历史记录会存到 ~/.hanako-pc/history.json。",
+                    "模型、音源、联网搜索等都在右上角「设置」里。",
                 fontSize = 14.sp
             )
         }
@@ -540,14 +716,14 @@ private fun androidx.compose.foundation.layout.ColumnScope.ResultBody(state: App
     if (!transcript.isNullOrBlank()) {
         Spacer(Modifier.height(8.dp))
         Text("语音转写（${transcript.length} 字）", style = MaterialTheme.typography.labelMedium)
-        SelectionContainerText(transcript, maxLines = 6, background = MaterialTheme.colorScheme.surfaceContainerHighest)
+        FoldableText(transcript, maxLines = 6, background = MaterialTheme.colorScheme.surfaceContainerHighest)
     }
 
     val ocr = state.ocrText
     if (!ocr.isNullOrBlank()) {
         Spacer(Modifier.height(6.dp))
         Text("OCR 原文（${ocr.length} 字）", style = MaterialTheme.typography.labelMedium)
-        SelectionContainerText(ocr, maxLines = 6, background = MaterialTheme.colorScheme.surfaceContainerHighest)
+        FoldableText(ocr, maxLines = 6, background = MaterialTheme.colorScheme.surfaceContainerHighest)
     }
 
     Spacer(Modifier.height(8.dp))
@@ -568,16 +744,12 @@ private fun androidx.compose.foundation.layout.ColumnScope.ResultBody(state: App
 }
 
 /**
- * 转写 / OCR 原文：默认折到 [maxLines] 行，点一下展开全文。
+ * 转写 / OCR 原文：默认折到 [maxLines] 行，点一下展开。
  *
- * 不在这里做内部滚动——外层结果区已经是一个滚动容器，嵌套滚动在桌面端会互相抢滚轮。
+ * 不在这里做内部滚动——外层结果区已是滚动容器，嵌套滚动在桌面端会互相抢滚轮。
  */
 @Composable
-private fun SelectionContainerText(
-    text: String,
-    maxLines: Int,
-    background: androidx.compose.ui.graphics.Color
-) {
+private fun FoldableText(text: String, maxLines: Int, background: Color) {
     var expanded by remember { mutableStateOf(false) }
     SelectionContainer {
         Text(
@@ -594,10 +766,7 @@ private fun SelectionContainerText(
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.ColumnScope.HistoryBody(
-    state: AppState,
-    onBack: () -> Unit
-) {
+private fun ColumnScope.HistoryBody(state: AppState, onBack: () -> Unit) {
     if (state.history.isEmpty()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             Text("还没有历史记录。作答一次就会出现在这里。", style = MaterialTheme.typography.bodySmall)
@@ -657,7 +826,11 @@ private fun HistoryRow(entry: HistoryEntry, onOpen: () -> Unit, onDelete: () -> 
                 )
             }
             Spacer(Modifier.height(4.dp))
-            Text(entry.summary.ifBlank { "（空）" }, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+            Text(
+                entry.summary.ifBlank { "（空）" },
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2
+            )
         }
     }
 }
