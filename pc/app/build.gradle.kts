@@ -34,7 +34,7 @@ compose.desktop {
             }
             targetFormats(*formats)
             packageName = "HanakoAI-EX"
-            packageVersion = "0.0.30"
+            packageVersion = "0.0.31"
             // jpackage 在中文 Windows 上会用系统 GBK 解码这些字段，
             // 非 ASCII 会抛 MalformedInputException("Input length = 1")，这里必须纯英文。
             description = "HanakoAI-EX PC - desktop AI assistant (preview)"

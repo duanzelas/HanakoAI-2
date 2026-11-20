@@ -18,9 +18,34 @@ data class PcRecording(
     val wav: ByteArray get() = PcWav.wrapPcm16(pcm)
 }
 
+/**
+ * 这次录音开哪几路。
+ *
+ * 两路可以同时开：系统声音（视频里的人声）+ 麦克风（自己说话），混成一条后一起送去转写。
+ * 这是最常见的网课/会议场景——光录系统声音听不到自己提问，光录麦克风听不到对方。
+ */
+data class RecordOptions(
+    val system: Boolean = true,
+    val mic: Boolean = false
+) {
+    val any: Boolean get() = system || mic
+
+    val label: String
+        get() = when {
+            system && mic -> "系统声音 + 麦克风"
+            system -> "系统声音"
+            mic -> "麦克风"
+            else -> "未选择音源"
+        }
+}
+
 /** 开始录音的结果。失败原因要能直接展示给用户，所以不用 Boolean。 */
 sealed interface RecordStart {
-    data object Ok : RecordStart
+    /**
+     * 成功。[sources] 是真正开起来的音源，[skipped] 是用户开了但设备不可用而跳过的，
+     * 两者都要显示出来——静默跳过会让人以为「我明明开了麦克风，怎么没录进去」。
+     */
+    data class Ok(val sources: List<String>, val skipped: List<String>) : RecordStart
 
     /** 系统内录：机器上没有「立体声混音 / Stereo Mix」这类回环设备。 */
     data object NoSystemDevice : RecordStart
@@ -28,108 +53,274 @@ sealed interface RecordStart {
     /** 麦克风打不开：被占用或没有输入设备。 */
     data object NoMicrophone : RecordStart
 
+    /** 两路都关着。 */
+    data object NoSource : RecordStart
+
     data class Failed(val message: String) : RecordStart
 }
 
 /**
  * 录音。
  *
- * 两种音源：
- * - [AudioSource.SYSTEM]：系统声音，走声卡的「立体声混音 / Stereo Mix」回环输入。
- *   Java Sound 没有 WASAPI loopback 的 API，只能借这个回环设备；Realtek 等驱动自带，
- *   但默认常被禁用，所以找不到时明确报 [RecordStart.NoSystemDevice]，让人去系统设置里启用，
- *   而不是偷偷换成麦克风（那样录到的全是环境噪音，用户完全无法判断哪里错了）。
- * - [AudioSource.MIC]：麦克风。
+ * 音源：
+ * - 系统声音：走声卡的「立体声混音 / Stereo Mix」回环输入。Java Sound 没有
+ *   WASAPI loopback 的 API，只能借这个设备；Realtek 等驱动自带，但默认常被禁用。
+ * - 麦克风：普通输入设备。
  *
- * 统一产出 16 kHz / 单声道 / 16 位 PCM。设备不接受这个格式时（部分回环设备只给
- * 44.1k 立体声），按设备支持的格式打开，读线程里做下混 + 线性重采样。
+ * 两路同时开时各自跑一个读线程，统一转成 16 kHz / 单声道 / 16 位 PCM 后进各自队列，
+ * 再由混音线程按「所有队列都够一段」的节奏取出、逐样本相加（超出就削顶）。
+ * 短录音（上限 110 秒）的两个设备时钟漂移可以忽略，不必做重采样对齐。
+ *
+ * 设备不接受 16k 单声道时（部分回环设备只给 44.1k 立体声），按设备支持的格式打开，
+ * 读线程里做下混 + 线性重采样。
  */
 class PcRecorder {
 
+    private class Channel(
+        val name: String,
+        val line: TargetDataLine,
+        val format: AudioFormat
+    ) {
+        /** 已转成 16k 单声道的 PCM 块，按到达顺序排队。 */
+        val queue = ArrayDeque<ByteArray>()
+    }
+
+    private val lock = Any()
+
     @Volatile
     private var running = false
-    private var line: TargetDataLine? = null
-    private var worker: Thread? = null
+
+    private val channels = ArrayList<Channel>()
+    private val readers = ArrayList<Thread>()
+    private var mixer: Thread? = null
+
     private val buffer = ByteArrayOutputStream()
 
     @Volatile
     private var peak = 0
+
     private var startedAtNanos = 0L
+
+    /** 本次实际开起来的音源名，用于状态栏展示。 */
+    @Volatile
+    var activeSources: List<String> = emptyList()
+        private set
 
     val recording: Boolean get() = running
 
-    fun start(source: AudioSource): RecordStart {
-        if (running) return RecordStart.Ok
-        val opened = synchronized(this) {
-            when (source) {
-                AudioSource.SYSTEM -> openSystem() ?: return RecordStart.NoSystemDevice
-                AudioSource.MIC -> openMic() ?: return RecordStart.NoMicrophone
+    fun start(options: RecordOptions): RecordStart {
+        if (running) return RecordStart.Ok(activeSources, emptyList())
+        if (!options.any) return RecordStart.NoSource
+
+        val opened = ArrayList<Channel>()
+        val skipped = ArrayList<String>()
+
+        if (options.system) {
+            val line = openSystem()
+            if (line == null) {
+                // 只开了系统内录：直接失败，让人去启用设备
+                if (!options.mic) return RecordStart.NoSystemDevice
+                skipped += "系统声音（未找到「立体声混音」设备）"
+            } else {
+                val channel = runCatching {
+                    line.line.open(line.format, READ_CHUNK_BYTES * 2)
+                    line.line.start()
+                    Channel("系统声音", line.line, line.format)
+                }.getOrElse {
+                    runCatching { line.line.close() }
+                    skipped += "系统声音（${it.message ?: "设备打不开"}）"
+                    null
+                }
+                if (channel != null) opened += channel
             }
         }
-        val ready = runCatching {
-            opened.line.open(opened.format, BUFFER_BYTES * 4)
-            opened.line.start()
-            opened
-        }.getOrElse { return RecordStart.Failed(it.message ?: "打开录音设备失败") }
 
-        synchronized(this) {
+        if (options.mic) {
+            val line = openMic()
+            if (line == null) {
+                if (opened.isEmpty()) return RecordStart.NoMicrophone
+                skipped += "麦克风（被占用或没有输入设备）"
+            } else {
+                val channel = runCatching {
+                    line.line.open(line.format, READ_CHUNK_BYTES * 2)
+                    line.line.start()
+                    Channel("麦克风", line.line, line.format)
+                }.getOrElse {
+                    runCatching { line.line.close() }
+                    if (opened.isEmpty()) return RecordStart.Failed(it.message ?: "麦克风打不开")
+                    skipped += "麦克风（${it.message ?: "设备打不开"}）"
+                    null
+                }
+                if (channel != null) opened += channel
+            }
+        }
+
+        if (opened.isEmpty()) {
+            return RecordStart.Failed(skipped.joinToString("；").ifBlank { "没有可用的录音设备" })
+        }
+
+        synchronized(lock) {
+            channels.clear()
+            channels += opened
+            readers.clear()
             buffer.reset()
             peak = 0
-            line = ready.line
             running = true
             startedAtNanos = System.nanoTime()
+            activeSources = opened.map { it.name }
         }
-        worker = Thread({ readLoop(ready) }, "hanako-pc-recorder").apply {
+
+        val readThreads = opened.map { channel ->
+            Thread({ readLoop(channel) }, "hanako-pc-rec-${channel.name}").apply {
+                isDaemon = true
+                start()
+            }
+        }
+        val mixThread = Thread({ mixLoop() }, "hanako-pc-mixer").apply {
             isDaemon = true
             start()
         }
-        return RecordStart.Ok
+        synchronized(lock) {
+            readers += readThreads
+            mixer = mixThread
+        }
+        return RecordStart.Ok(activeSources, skipped)
     }
 
-    private fun readLoop(opened: OpenedLine) {
-        val chunk = ByteArray(8192)
-        val needsConvert = opened.format.sampleRate != 16_000f || opened.format.channels != 1
+    private fun readLoop(channel: Channel) {
+        val chunk = ByteArray(READ_CHUNK_BYTES)
+        val needsConvert =
+            channel.format.sampleRate != 16_000f || channel.format.channels != 1
         while (running) {
-            val read = runCatching { opened.line.read(chunk, 0, chunk.size) }.getOrDefault(-1)
-            if (read <= 0) continue
+            val read = runCatching { channel.line.read(chunk, 0, chunk.size) }.getOrDefault(-1)
+            if (read <= 0) {
+                // -1 表示线被关掉了，正常结束
+                if (read < 0) return
+                continue
+            }
             val pcm = if (needsConvert) {
-                PcmConvert.to16kMono(chunk, read, opened.format)
+                PcmConvert.to16kMono(chunk, read, channel.format)
             } else {
                 chunk.copyOf(read)
             }
             if (pcm.isEmpty()) continue
-            synchronized(this) {
-                if (!running) return
-                buffer.write(pcm, 0, pcm.size)
-                val chunkPeak = PcWav.peakAmplitude(pcm)
-                if (chunkPeak > peak) peak = chunkPeak
+            synchronized(lock) {
+                // 收尾时 read 可能返回最后半块，先收下再退出，别把尾巴扔掉
+                channel.queue.addLast(pcm)
+                // 兜底：某一路异常快地推数据时不把内存吃光
+                while (channel.queue.size > MAX_QUEUE_CHUNKS) channel.queue.removeFirst()
             }
+            if (!running) return
         }
     }
 
+    private fun mixLoop() {
+        while (running) {
+            val mixed = takeMixed()
+            if (mixed == null) {
+                runCatching { Thread.sleep(8) }
+                continue
+            }
+            synchronized(lock) {
+                buffer.write(mixed, 0, mixed.size)
+            }
+            val chunkPeak = PcWav.peakAmplitude(mixed)
+            if (chunkPeak > peak) peak = chunkPeak
+        }
+    }
+
+    /**
+     * 取一段可混的音：所有通道里「最少的那一路」剩余量就是本次能取的量，
+     * 这样两路不会错位。取不到（某一路还没数据）就返回 null 让混音线程歇一下。
+     */
+    private fun takeMixed(): ByteArray? {
+        synchronized(lock) {
+            if (channels.isEmpty()) return null
+            var available = Int.MAX_VALUE
+            for (channel in channels) {
+                val size = channel.queue.sumOf { it.size }
+                if (size < available) available = size
+            }
+            if (available == Int.MAX_VALUE || available < 2) return null
+            val take = minOf(available, MIX_CHUNK_BYTES) / 2 * 2
+            if (take <= 0) return null
+
+            val parts = channels.map { drain(it, take) }
+            if (parts.size == 1) return parts[0]
+
+            val out = ByteArray(take)
+            var i = 0
+            while (i + 1 < take) {
+                var sum = 0
+                for (part in parts) {
+                    if (i + 1 < part.size) sum += sampleAt(part, i)
+                }
+                writeSample(out, i, sum.coerceIn(-32768, 32767))
+                i += 2
+            }
+            return out
+        }
+    }
+
+    /** 从队列头部取走 [want] 字节；不足就返回实际取到的（其余当静音）。 */
+    private fun drain(channel: Channel, want: Int): ByteArray {
+        val out = ByteArray(want)
+        var filled = 0
+        while (filled < want) {
+            val head = channel.queue.firstOrNull() ?: break
+            val need = want - filled
+            if (head.size <= need) {
+                head.copyInto(out, filled)
+                filled += head.size
+                channel.queue.removeFirst()
+            } else {
+                head.copyInto(out, filled, 0, need)
+                channel.queue[0] = head.copyOfRange(need, head.size)
+                filled += need
+            }
+        }
+        return if (filled == want) out else out.copyOf(filled)
+    }
+
     fun stop(): PcRecording? {
-        val target: TargetDataLine?
-        val thread: Thread?
-        synchronized(this) {
+        val target: List<Channel>
+        val threads: List<Thread>
+        val mixThread: Thread?
+        synchronized(lock) {
             if (!running) return null
             running = false
-            target = line
-            thread = worker
-            line = null
-            worker = null
+            target = channels.toList()
+            threads = readers.toList()
+            mixThread = mixer
+            readers.clear()
+            mixer = null
         }
         // 先 stop 打断阻塞的 read()，再 join，否则要等满缓冲区
-        runCatching { target?.stop() }
-        runCatching { target?.close() }
-        runCatching { thread?.join(600) }
+        target.forEach {
+            runCatching { it.line.stop() }
+            runCatching { it.line.close() }
+        }
+        threads.forEach { runCatching { it.join(600) } }
+        runCatching { mixThread?.join(600) }
+
+        // 把两路各自剩下的尾巴也混进去，别丢掉最后半秒
+        var guard = 0
+        while (guard++ < 200) {
+            val rest = takeMixed() ?: break
+            synchronized(lock) { buffer.write(rest, 0, rest.size) }
+            val chunkPeak = PcWav.peakAmplitude(rest)
+            if (chunkPeak > peak) peak = chunkPeak
+        }
 
         val pcm: ByteArray
         val peakValue: Int
-        synchronized(this) {
+        synchronized(lock) {
             pcm = buffer.toByteArray()
             peakValue = peak
             buffer.reset()
             peak = 0
+            channels.clear()
+            activeSources = emptyList()
         }
         if (pcm.isEmpty()) return null
         val duration = PcWav.durationMillis(pcm.size)
@@ -197,7 +388,17 @@ class PcRecorder {
         const val SAMPLE_RATE = 16_000
         const val CHANNELS = 1
         const val BITS = 16
-        private const val BUFFER_BYTES = 8192
+        /**
+         * 单次 read 的字节数。16k 单声道下 4096 字节 ≈ 128 ms：
+         * 停止时要等这一次 read 返回，块越大，末尾被丢掉的部分越多。
+         */
+        private const val READ_CHUNK_BYTES = 4096
+
+        /** 单次混音最多取多少字节（约 64 ms），小块能让开始/结束的延迟更小。 */
+        private const val MIX_CHUNK_BYTES = 2048
+
+        /** 单路排队上限，正常远达不到；只在设备异常推流时兜底。 */
+        private const val MAX_QUEUE_CHUNKS = 600
 
         /** 低于这个峰值基本就是静音（环境底噪通常在 50 以内）。 */
         const val SILENCE_THRESHOLD = 220
@@ -237,6 +438,17 @@ class PcRecorder {
         }
 
         fun hasSystemAudio(): Boolean = systemDevices().isNotEmpty()
+
+        private fun sampleAt(pcm: ByteArray, offset: Int): Int {
+            val lo = pcm[offset].toInt() and 0xFF
+            val hi = pcm[offset + 1].toInt()
+            return ((hi shl 8) or lo).toShort().toInt()
+        }
+
+        private fun writeSample(out: ByteArray, offset: Int, value: Int) {
+            out[offset] = (value and 0xFF).toByte()
+            out[offset + 1] = ((value shr 8) and 0xFF).toByte()
+        }
     }
 }
 

@@ -66,21 +66,6 @@ enum class ProviderPreset(
     )
 }
 
-/**
- * 录音音源。
- *
- * PC 端没有 AudioPlaybackCapture，系统内录要靠声卡的「立体声混音 / Stereo Mix」这类
- * 回环输入设备（Realtek 驱动自带，默认常被禁用）。找不到设备时明确报错让人去启用，
- * 不静默退回麦克风——否则录进来的全是环境噪音，用户根本无从排查。
- */
-enum class AudioSource(val label: String) {
-    /** 系统声音（立体声混音 / 回环设备）。 */
-    SYSTEM("系统声音"),
-
-    /** 麦克风。 */
-    MIC("麦克风")
-}
-
 /** 联网搜索引擎，字段格式对齐各家官方 API。 */
 enum class SearchKind(val label: String) {
     TAVILY("Tavily"),
@@ -107,9 +92,18 @@ data class PcSettings(
     /** 固定截图区域；为空表示尚未框选。 */
     val region: Region? = null,
 
+    // ---- 录音音源 ----
+    /**
+     * 系统内录，默认开启。
+     *
+     * PC 端没有 AudioPlaybackCapture，系统内录靠声卡的「立体声混音 / Stereo Mix」
+     * 回环输入设备（Realtek 驱动自带，默认常被禁用）；设备缺失时明确报错，不静默换麦。
+     */
+    val systemAudioEnabled: Boolean = true,
+    /** 麦克风，默认关闭，独立开关；和系统内录同时开启时两路混音。 */
+    val micEnabled: Boolean = false,
+
     // ---- 语音转写 ----
-    /** 录音音源：默认系统声音，找不到设备时会在录音前明确报错。 */
-    val audioSource: AudioSource = AudioSource.SYSTEM,
     /** 转写服务地址，默认 DeepSeek 官方 ASR。 */
     val transcriptionBaseUrl: String = DEFAULT_TRANSCRIPTION_BASE_URL,
     /** 转写 Key；留空时复用 [apiKey]（DeepSeek 的 chat 与 ASR 是同一个 Key）。 */
@@ -125,12 +119,40 @@ data class PcSettings(
     /** 搜索结果条数，1..10。 */
     val searchResultCount: Int = 5,
 
+    // ---- 全局快捷键 ----
+    /** 多模态识屏：按一下截一张固定区域，直接问多模态模型。 */
+    val hotkeyCapture: HotkeySpec = HotkeySpec.DEFAULT_CAPTURE,
+    /** 录音识屏：按一下开始录、再按一下结束并作答。 */
+    val hotkeyRecord: HotkeySpec = HotkeySpec.DEFAULT_RECORD,
+    /** 重新框选区域。 */
+    val hotkeySelect: HotkeySpec = HotkeySpec.DEFAULT_SELECT,
+
     // ---- 历史 ----
     val historyLimit: Int = 200
 ) {
     /** 转写实际使用的 Key：单独填了就用单独的，否则复用主 Key。 */
     val effectiveTranscriptionKey: String
         get() = transcriptionApiKey.ifBlank { apiKey }
+
+    /** 这次录音开哪几路：两个开关组合成系统内录 / 麦克风 / 混音。 */
+    fun recordOptions(): RecordOptions = RecordOptions(
+        system = systemAudioEnabled,
+        mic = micEnabled
+    )
+
+    /** 改某个动作的快捷键，其余保持不变。 */
+    fun withHotkey(action: HotkeyAction, spec: HotkeySpec): PcSettings = when (action) {
+        HotkeyAction.CAPTURE -> copy(hotkeyCapture = spec)
+        HotkeyAction.RECORD -> copy(hotkeyRecord = spec)
+        HotkeyAction.SELECT -> copy(hotkeySelect = spec)
+    }
+
+    /** 取某个动作当前的快捷键，用于冲突检测与界面展示。 */
+    fun hotkeyOf(action: HotkeyAction): HotkeySpec = when (action) {
+        HotkeyAction.CAPTURE -> hotkeyCapture
+        HotkeyAction.RECORD -> hotkeyRecord
+        HotkeyAction.SELECT -> hotkeySelect
+    }
 
     fun applyPreset(preset: ProviderPreset): PcSettings = copy(
         kind = preset.kind,
@@ -151,7 +173,8 @@ data class PcSettings(
             props["textModel"] = textModel
             props["route"] = route.name
             props["systemPrompt"] = systemPrompt
-            props["audioSource"] = audioSource.name
+            props["systemAudioEnabled"] = systemAudioEnabled.toString()
+            props["micEnabled"] = micEnabled.toString()
             props["transcriptionBaseUrl"] = transcriptionBaseUrl
             props["transcriptionApiKey"] = transcriptionApiKey
             props["transcriptionPath"] = transcriptionPath
@@ -161,6 +184,9 @@ data class PcSettings(
             props["searchApiKey"] = searchApiKey
             props["searchResultCount"] = searchResultCount.toString()
             props["historyLimit"] = historyLimit.toString()
+            props["hotkey.capture"] = hotkeyCapture.encode()
+            props["hotkey.record"] = hotkeyRecord.encode()
+            props["hotkey.select"] = hotkeySelect.encode()
             region?.let {
                 props["region.x"] = it.x.toString()
                 props["region.y"] = it.y.toString()
@@ -202,9 +228,8 @@ data class PcSettings(
                     ?: SolveRoute.MULTIMODAL_DIRECT,
                 systemPrompt = props.getProperty("systemPrompt") ?: DEFAULT_SOLVE_PROMPT,
                 region = readRegion(props),
-                audioSource = props.getProperty("audioSource")
-                    ?.let { runCatching { AudioSource.valueOf(it) }.getOrNull() }
-                    ?: AudioSource.SYSTEM,
+                systemAudioEnabled = readSystemEnabled(props),
+                micEnabled = readMicEnabled(props),
                 transcriptionBaseUrl = props.getProperty("transcriptionBaseUrl")
                     ?: DEFAULT_TRANSCRIPTION_BASE_URL,
                 transcriptionApiKey = props.getProperty("transcriptionApiKey").orEmpty(),
@@ -217,9 +242,32 @@ data class PcSettings(
                     ?: SearchKind.TAVILY,
                 searchApiKey = props.getProperty("searchApiKey").orEmpty(),
                 searchResultCount = props.getProperty("searchResultCount")?.toIntOrNull() ?: 5,
-                historyLimit = props.getProperty("historyLimit")?.toIntOrNull() ?: 200
+                historyLimit = props.getProperty("historyLimit")?.toIntOrNull() ?: 200,
+                hotkeyCapture = HotkeySpec.decode(props.getProperty("hotkey.capture"))
+                    ?: HotkeySpec.DEFAULT_CAPTURE,
+                hotkeyRecord = HotkeySpec.decode(props.getProperty("hotkey.record"))
+                    ?: HotkeySpec.DEFAULT_RECORD,
+                hotkeySelect = HotkeySpec.decode(props.getProperty("hotkey.select"))
+                    ?: HotkeySpec.DEFAULT_SELECT
             )
         }.getOrDefault(PcSettings())
+
+        /**
+         * 系统内录是否开启。
+         *
+         * 0.0.30 及更早只有单一 `audioSource`（SYSTEM / MIC），这里做一次迁移：
+         * 老配置选了麦克风的，转成「系统内录关、麦克风开」，语义不变。
+         */
+        private fun readSystemEnabled(props: Properties): Boolean {
+            props.getProperty("systemAudioEnabled")?.toBooleanStrictOrNull()?.let { return it }
+            val legacy = props.getProperty("audioSource") ?: return true
+            return legacy != "MIC"
+        }
+
+        private fun readMicEnabled(props: Properties): Boolean {
+            props.getProperty("micEnabled")?.toBooleanStrictOrNull()?.let { return it }
+            return props.getProperty("audioSource") == "MIC"
+        }
 
         private fun readRegion(props: Properties): Region? {
             val x = props.getProperty("region.x")?.toIntOrNull() ?: return null

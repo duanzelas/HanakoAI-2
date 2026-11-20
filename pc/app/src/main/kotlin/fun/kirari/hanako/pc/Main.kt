@@ -65,23 +65,46 @@ fun main(args: Array<String>) {
         println("providers= ${ProviderKind.entries.size}")
         println("presets  = ${ProviderPreset.entries.joinToString { it.label }}")
         println("routes   = ${SolveRoute.entries.joinToString { it.name }}")
-        println("sources  = ${AudioSource.entries.joinToString { it.label }}")
+        println("sources  = ${RecordOptions().label} / ${RecordOptions(system = false, mic = true).label}")
+        println(
+            "keys     = " + HotkeyAction.entries.joinToString { "${it.label}:${PcSettings().hotkeyOf(it).label}" }
+        )
         println("search   = ${SearchKind.entries.joinToString { it.label }}")
         println("parser   = '答案：ABD' -> ${AnswerParser.lettersOf("答案：ABD")}")
         println("parser   = '选 B'     -> ${AnswerParser.lettersOf("选 B")}")
         println("parser   = '今天天气' -> '${AnswerParser.lettersOf("今天天气不错")}'")
 
         val recorder = PcRecorder()
-        val micOk = recorder.start(AudioSource.MIC) == RecordStart.Ok
+        val micStart = recorder.start(RecordOptions(system = false, mic = true))
+        val micOk = micStart is RecordStart.Ok
         if (micOk) recorder.cancel()
         println("mic      = ${if (micOk) "可用" else "不可用（无输入设备或被占用）"}")
         val devices = PcRecorder.systemDevices()
         println("system   = ${devices.joinToString().ifBlank { "未找到回环设备（需在声音设置里启用「立体声混音」）" }}")
-        val sysStart = if (devices.isEmpty()) RecordStart.NoSystemDevice else recorder.start(AudioSource.SYSTEM)
-        if (sysStart == RecordStart.Ok) recorder.cancel()
-        println("sysRecord= ${if (sysStart == RecordStart.Ok) "可用" else "不可用：$sysStart"}")
+        val sysStart = if (devices.isEmpty()) {
+            RecordStart.NoSystemDevice
+        } else {
+            recorder.start(RecordOptions(system = true))
+        }
+        val sysOk = sysStart is RecordStart.Ok
+        if (sysOk) recorder.cancel()
+        println("sysRecord= ${if (sysOk) "可用" else "不可用：$sysStart"}")
 
-        val hotkeys = HotkeyController({}, {}, {})
+        // 真录一秒看数据流：只开系统、只开麦、两路混音各来一次
+        fun recordFor(options: RecordOptions): String {
+            val started = recorder.start(options)
+            if (started !is RecordStart.Ok) return "启动失败：$started"
+            Thread.sleep(1_500)
+            val elapsed = recorder.elapsedMillis()
+            val clip = recorder.stop() ?: return "无数据"
+            return "wall=${elapsed}ms audio=${clip.durationMillis}ms peak=${clip.peakAmplitude} " +
+                "[${started.sources.joinToString("+")}]"
+        }
+        println("recSystem= ${recordFor(RecordOptions(system = sysOk, mic = false))}")
+        println("recMic   = ${recordFor(RecordOptions(system = false, mic = micOk))}")
+        println("recMix   = ${recordFor(RecordOptions(system = sysOk, mic = micOk))}")
+
+        val hotkeys = HotkeyController({ PcSettings() }, {}, {}, {})
         println("hotkeys  = ${hotkeys.install()}")
         hotkeys.uninstall()
 
@@ -96,11 +119,13 @@ fun main(args: Array<String>) {
 
     application {
         val scope = rememberCoroutineScope()
-        val state = remember { AppState(scope) }
+        val state = remember {
+            AppState(scope).also { if (args.contains("--settings")) it.showSettings = true }
+        }
 
         val tray = remember {
             TrayController(
-                onCapture = { state.captureNow() },
+                onCapture = { state.captureMultimodal() },
                 onSelect = { state.startSelect() },
                 onClipboard = { state.captureClipboard() },
                 onOpenSettings = { state.showMain = true },
@@ -110,7 +135,9 @@ fun main(args: Array<String>) {
         }
         val hotkeys = remember {
             HotkeyController(
-                onCapture = { state.captureNow() },
+                // 每次按键都读当前设置，改完键位立即生效，不用重启
+                settingsProvider = { state.settings },
+                onCapture = { state.captureMultimodal() },
                 onSelect = { state.startSelect() },
                 onRecord = { state.toggleRecording() }
             )
@@ -119,9 +146,11 @@ fun main(args: Array<String>) {
         DisposableEffect(Unit) {
             tray.install()
             state.tray = tray
+            state.hotkeys = hotkeys
             state.hotkeyAvailable = hotkeys.install()
             onDispose {
                 hotkeys.uninstall()
+                state.hotkeys = null
                 tray.uninstall()
             }
         }
@@ -230,6 +259,7 @@ private fun RecordButton(state: AppState) {
 private fun OperationPane(state: AppState) {
     val settings = state.settings
     val systemDevices = remember { PcRecorder.systemDevices() }
+    val options = settings.recordOptions()
 
     Column(
         modifier = Modifier
@@ -267,21 +297,25 @@ private fun OperationPane(state: AppState) {
         Text("当前配置", style = MaterialTheme.typography.titleSmall)
         InfoRow("处理方式", settings.route.label)
         InfoRow("模型", settings.visionModel.ifBlank { "未配置" })
-        InfoRow("录音音源", settings.audioSource.label)
-        if (settings.audioSource == AudioSource.SYSTEM) {
+        InfoRow("录音音源", options.label)
+        if (!options.any) {
             Text(
-                text = if (systemDevices.isEmpty()) {
-                    "未找到「立体声混音」设备：到 声音设置 → 录制 → 右键「显示禁用的设备」→ 启用它，" +
-                        "或到设置里改用麦克风"
-                } else {
-                    "可用设备：" + systemDevices.joinToString()
-                },
+                text = "两个音源都关着：到 设置 → 语音与录音 打开系统内录或麦克风",
                 style = MaterialTheme.typography.bodySmall,
-                color = if (systemDevices.isEmpty()) {
-                    MaterialTheme.colorScheme.error
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
+                color = MaterialTheme.colorScheme.error
+            )
+        } else if (options.system && systemDevices.isEmpty()) {
+            Text(
+                text = "未找到「立体声混音」设备：到 声音设置 → 录制 → 右键「显示禁用的设备」→ 启用它，" +
+                    "或只开麦克风",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        } else if (options.system) {
+            Text(
+                text = "可用设备：" + systemDevices.joinToString(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
 
@@ -301,11 +335,13 @@ private fun OperationPane(state: AppState) {
         Spacer(Modifier.height(6.dp))
         SectionDivider()
         Text("快捷键", style = MaterialTheme.typography.titleSmall)
+        HotkeyLine(settings.hotkeyCapture.label, "多模态识屏（截一张）")
+        HotkeyLine(settings.hotkeyRecord.label, "录音识屏（开始/结束）")
+        HotkeyLine(settings.hotkeySelect.label, "重新框选区域")
         Text(
-            text = "Ctrl+Alt+S 按固定区域作答\n" +
-                "Ctrl+Alt+R 重新框选区域\n" +
-                "Ctrl+Alt+V 开始/结束录音",
-            style = MaterialTheme.typography.bodySmall
+            text = "键位在「设置 → 快捷键」里改",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = buildString {
@@ -316,6 +352,24 @@ private fun OperationPane(state: AppState) {
                 append("\n配置：~/.hanako-pc/config.properties")
                 append("\n历史：~/.hanako-pc/history.json")
             },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/** 左栏的键位行：键名固定宽度，说明跟在后面，换行只影响说明那一列。 */
+@Composable
+private fun HotkeyLine(key: String, action: String) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = key,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.width(96.dp)
+        )
+        Text(
+            text = action,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -340,11 +394,24 @@ private fun InfoRow(label: String, value: String) {
 @Composable
 private fun SettingsWindow(state: AppState) {
     Window(
-        onCloseRequest = { state.showSettings = false },
+        onCloseRequest = {
+            state.cancelHotkeyCapture()
+            state.showSettings = false
+        },
         visible = state.showSettings,
         title = "设置 · ${PcInfo.APP_NAME}",
-        state = rememberWindowState(width = 560.dp, height = 760.dp)
+        state = rememberWindowState(width = 560.dp, height = 780.dp)
     ) {
+        // 设置窗和主窗都默认居中，直接弹出来会被主窗整个盖住（看起来像「点了没反应」），
+        // 每次显示时主动提到最前。
+        LaunchedEffect(state.showSettings) {
+            if (state.showSettings) {
+                runCatching {
+                    window.toFront()
+                    window.requestFocus()
+                }
+            }
+        }
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
                 Column(
@@ -357,11 +424,16 @@ private fun SettingsWindow(state: AppState) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("设置", style = MaterialTheme.typography.titleLarge)
                         Spacer(Modifier.weight(1f))
-                        TextButton(onClick = { state.showSettings = false }) { Text("关闭") }
+                        TextButton(onClick = {
+                            state.cancelHotkeyCapture()
+                            state.showSettings = false
+                        }) { Text("关闭") }
                     }
                     ModelSection(state)
                     SectionDivider()
                     RouteSection(state)
+                    SectionDivider()
+                    HotkeySection(state)
                     SectionDivider()
                     VoiceSection(state)
                     SectionDivider()
@@ -465,33 +537,132 @@ private fun RouteSection(state: AppState) {
 }
 
 @Composable
+private fun HotkeySection(state: AppState) {
+    val settings = state.settings
+
+    Text("快捷键", style = MaterialTheme.typography.titleSmall)
+    HotkeyRow(state, HotkeyAction.CAPTURE, settings.hotkeyCapture)
+    HotkeyRow(state, HotkeyAction.RECORD, settings.hotkeyRecord)
+    HotkeyRow(state, HotkeyAction.SELECT, settings.hotkeySelect)
+
+    Text(
+        text = "点「更改」后直接按下新的键或组合键（可带 Ctrl / Alt / Shift / Win），Esc 取消。" +
+            "建议带修饰键：单键在打字时会误触。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    if (!state.hotkeyAvailable) {
+        Text(
+            text = "全局快捷键注册失败：可能被杀毒软件拦截，请允许本程序监听键盘后重启。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error
+        )
+    }
+}
+
+@Composable
+private fun HotkeyRow(state: AppState, action: HotkeyAction, spec: HotkeySpec) {
+    val capturing = state.capturingAction == action
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(action.label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = action.hint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = if (capturing) "请按键…" else spec.label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = if (capturing) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
+        )
+        Spacer(Modifier.width(8.dp))
+        if (capturing) {
+            OutlinedButton(onClick = { state.cancelHotkeyCapture() }) { Text("取消") }
+        } else {
+            OutlinedButton(
+                onClick = { state.beginHotkeyCapture(action) },
+                enabled = state.hotkeyAvailable
+            ) { Text("更改") }
+            Spacer(Modifier.width(4.dp))
+            TextButton(onClick = { state.resetHotkey(action) }) {
+                Text("默认", fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+@Composable
 private fun VoiceSection(state: AppState) {
     val settings = state.settings
     val systemDevices = remember { PcRecorder.systemDevices() }
 
     Text("语音与录音", style = MaterialTheme.typography.titleSmall)
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        AudioSource.entries.forEach { source ->
-            FilterChip(
-                selected = settings.audioSource == source,
-                onClick = { state.updateSettings { it.copy(audioSource = source) } },
-                label = { Text(source.label, fontSize = 12.sp) }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(
+            checked = settings.systemAudioEnabled,
+            onCheckedChange = { enabled ->
+                state.updateSettings { it.copy(systemAudioEnabled = enabled) }
+            }
+        )
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text("系统内录", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "默认开启。走声卡的「立体声混音」回环设备，录视频/网课里的声音。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(
+            checked = settings.micEnabled,
+            onCheckedChange = { enabled ->
+                state.updateSettings { it.copy(micEnabled = enabled) }
+            }
+        )
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text("麦克风", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "默认关闭。打开后与系统声音混音，适合自己也要说话的场景。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
+    val options = settings.recordOptions()
     Text(
         text = when {
-            settings.audioSource == AudioSource.MIC ->
-                "录麦克风：会收到环境噪音，适合没有回环设备的机器。"
+            !options.any ->
+                "两个音源都关着，按录音键会直接报错。至少打开一个。"
 
-            systemDevices.isEmpty() ->
+            options.system && options.mic && systemDevices.isEmpty() ->
+                "没有找到「立体声混音」：到 声音设置 → 录制 → 右键「显示禁用的设备」→ 启用它。" +
+                    "现在录音只会用麦克风。部分机器需要装虚拟声卡（如 VB-Cable）才能内录。"
+
+            options.system && systemDevices.isEmpty() ->
                 "没有找到「立体声混音」：到 声音设置 → 录制 → 右键「显示禁用的设备」→ 启用「立体声混音」。" +
                     "部分机器需要装虚拟声卡（如 VB-Cable）才能内录。"
 
-            else -> "系统内录设备：" + systemDevices.joinToString()
+            options.system ->
+                "本次录音：" + options.label + "；设备：" + systemDevices.joinToString()
+
+            else -> "本次录音：麦克风（不含系统声音）"
         },
         style = MaterialTheme.typography.bodySmall,
-        color = if (settings.audioSource == AudioSource.SYSTEM && systemDevices.isEmpty()) {
+        color = if (options.system && systemDevices.isEmpty()) {
             MaterialTheme.colorScheme.error
         } else {
             MaterialTheme.colorScheme.onSurfaceVariant
@@ -704,9 +875,10 @@ private fun ColumnScope.ResultBody(state: AppState) {
             state.answer.isNotBlank() -> SelectableMarkdown(state.answer)
             state.busy -> Text("处理中…", fontSize = 14.sp)
             else -> Text(
-                "Ctrl+Alt+S 按固定区域截图作答，Ctrl+Alt+V 录音后作答。\n" +
+                "${state.settings.hotkeyCapture.label} 截一张图作答，" +
+                    "${state.settings.hotkeyRecord.label} 录音后作答。\n" +
                     "答案会同时出现在托盘图标和右下角浮窗上。\n" +
-                    "模型、音源、联网搜索等都在右上角「设置」里。",
+                    "模型、音源、快捷键、联网搜索等都在右上角「设置」里。",
                 fontSize = 14.sp
             )
         }

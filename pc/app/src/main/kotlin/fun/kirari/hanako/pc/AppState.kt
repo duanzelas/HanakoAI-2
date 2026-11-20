@@ -63,6 +63,11 @@ class AppState(private val scope: CoroutineScope) {
 
     var tray: TrayController? = null
     var hotkeyAvailable by mutableStateOf(false)
+    var hotkeys: HotkeyController? = null
+
+    /** 正在等待用户按键的快捷键动作；非 null 时全局动作全部暂停。 */
+    var capturingAction by mutableStateOf<HotkeyAction?>(null)
+        private set
 
     private val solver = Solver()
     private val recorder = PcRecorder()
@@ -73,6 +78,9 @@ class AppState(private val scope: CoroutineScope) {
 
     /** 上一张图，供「重新生成」用。 */
     private var lastImage: BufferedImage? = null
+
+    /** 从录音入口进来但还没框选过区域：选完就自动开始录音，不用再按一次。 */
+    private var recordAfterSelect = false
 
     fun updateSettings(transform: (PcSettings) -> PcSettings) {
         settings = transform(settings)
@@ -91,10 +99,17 @@ class AppState(private val scope: CoroutineScope) {
 
     // ---------------------------------------------------------------- 截图作答
 
-    /** 按固定区域（或剪贴板）截图作答；语音模式下先录音。 */
-    fun captureNow() {
+    /**
+     * 按固定区域截图作答；语音模式下先录音。
+     *
+     * [routeOverride] 给快捷键用：绑在「多模态识屏」上的键不管当前工作模式是什么，
+     * 都直接截一张图问多模态模型——快捷键的意义就是「按了就按这个来」，
+     * 还跟着全局设置漂移等于没绑。
+     */
+    fun captureNow(routeOverride: SolveRoute? = null) {
         if (busy || recording) return
-        if (settings.route == SolveRoute.AUDIO_AND_SCREEN) {
+        val route = routeOverride ?: settings.route
+        if (route == SolveRoute.AUDIO_AND_SCREEN) {
             // 先确认识别区域，否则录完音才发现没地方截图，白录一次
             if (settings.region == null) {
                 status = "语音模式也需要先框选一次区域"
@@ -110,7 +125,12 @@ class AppState(private val scope: CoroutineScope) {
             startSelect()
             return
         }
-        runCapture(region)
+        runCapture(region, routeOverride = routeOverride)
+    }
+
+    /** 多模态识屏：截一张固定区域，直接交给多模态模型。 */
+    fun captureMultimodal() {
+        captureNow(SolveRoute.MULTIMODAL_DIRECT)
     }
 
     fun startSelect() {
@@ -126,9 +146,18 @@ class AppState(private val scope: CoroutineScope) {
                 // 等遮罩彻底消失再截，否则会把绿色选择框一起截进去
                 scope.launch {
                     delay(220)
-                    if (settings.route == SolveRoute.AUDIO_AND_SCREEN) startRecording() else runCapture(region)
+                    when {
+                        recordAfterSelect -> {
+                            recordAfterSelect = false
+                            startRecording()
+                        }
+
+                        settings.route == SolveRoute.AUDIO_AND_SCREEN -> startRecording()
+                        else -> runCapture(region)
+                    }
                 }
             } else {
+                recordAfterSelect = false
                 status = "已取消框选"
                 showMain = true
             }
@@ -150,15 +179,37 @@ class AppState(private val scope: CoroutineScope) {
     /** 开始录音；到 [PcSettings.maxRecordSeconds] 会自动结束并作答。 */
     fun startRecording() {
         if (busy || recording) return
-        when (val result = recorder.start(settings.audioSource)) {
-            RecordStart.Ok -> Unit
+        val options = settings.recordOptions()
+        if (!options.any) {
+            status = "系统内录和麦克风都关着：到 设置 → 语音与录音 里打开至少一个"
+            return
+        }
+        // 录完才截不到图是最亏的，所以先要区域：没有就弹框选，选完自动开录
+        if (settings.region == null) {
+            recordAfterSelect = true
+            status = "还没有固定区域：先框选一次，选完自动开始录音"
+            startSelect()
+            return
+        }
+        val sources: List<String>
+        val skipped: List<String>
+        when (val result = recorder.start(options)) {
+            is RecordStart.Ok -> {
+                sources = result.sources
+                skipped = result.skipped
+            }
             RecordStart.NoSystemDevice -> {
                 status = "系统内录不可用：没有找到「立体声混音」设备。" +
-                    "到 声音设置 → 录制 → 右键「显示禁用的设备」→ 启用「立体声混音」，或改用麦克风"
+                    "到 声音设置 → 录制 → 右键「显示禁用的设备」→ 启用「立体声混音」，" +
+                    "或在设置里单独打开麦克风"
                 return
             }
             RecordStart.NoMicrophone -> {
                 status = "打不开麦克风：被其他程序占用，或系统没有输入设备"
+                return
+            }
+            RecordStart.NoSource -> {
+                status = "没有选择录音音源"
                 return
             }
             is RecordStart.Failed -> {
@@ -169,10 +220,14 @@ class AppState(private val scope: CoroutineScope) {
         recording = true
         recordSeconds = 0
         tray?.setRecording(true)
-        status = if (settings.audioSource == AudioSource.SYSTEM) {
-            "正在录系统声音… 再按一次结束"
-        } else {
-            "正在录麦克风… 再按一次结束"
+        status = buildString {
+            append("正在录音（")
+            append(sources.joinToString(" + "))
+            append("）… 再按一次结束")
+            if (skipped.isNotEmpty()) {
+                append("\n未启用：")
+                append(skipped.joinToString())
+            }
         }
         recordJob?.cancel()
         recordJob = scope.launch {
@@ -288,7 +343,11 @@ class AppState(private val scope: CoroutineScope) {
         status = "第 ${index + 1}/${versions.size} 个答案"
     }
 
-    private fun runCapture(region: Region?, provider: (() -> BufferedImage?)? = null) {
+    private fun runCapture(
+        region: Region?,
+        routeOverride: SolveRoute? = null,
+        provider: (() -> BufferedImage?)? = null
+    ) {
         if (busy || recording) return
         scope.launch {
             busy = true
@@ -301,7 +360,12 @@ class AppState(private val scope: CoroutineScope) {
                     return@launch
                 }
                 lastImage = image
-                solveImage(image, voiceTranscript = null, appendVersion = false)
+                solveImage(
+                    image = image,
+                    voiceTranscript = null,
+                    appendVersion = false,
+                    routeOverride = routeOverride
+                )
             } catch (t: Throwable) {
                 fail(t)
             } finally {
@@ -314,9 +378,11 @@ class AppState(private val scope: CoroutineScope) {
     private suspend fun solveImage(
         image: BufferedImage,
         voiceTranscript: String?,
-        appendVersion: Boolean
+        appendVersion: Boolean,
+        routeOverride: SolveRoute? = null
     ) {
-        val result = solver.solve(settings, image, voiceTranscript) { step -> status = step }
+        val effective = if (routeOverride == null) settings else settings.copy(route = routeOverride)
+        val result = solver.solve(effective, image, voiceTranscript) { step -> status = step }
         answer = result.answer
         letters = result.letters
         ocrText = result.ocrText
@@ -397,6 +463,70 @@ class AppState(private val scope: CoroutineScope) {
     fun clearHistory() {
         history = PcHistory.clear()
         closeHistory()
+    }
+
+    // ---------------------------------------------------------------- 快捷键
+
+    /**
+     * 进入「按一个键来设置」的状态。
+     *
+     * 捕获走的是同一条全局监听（[HotkeyController.captureNext]），不是界面的 onKeyEvent：
+     * 一来不用把 Compose 的 Key 翻译成 jnativehook 的 keyCode，二来捕获期间全局动作
+     * 自动停摆，不会出现「设快捷键时顺手截了一张图」。
+     */
+    fun beginHotkeyCapture(action: HotkeyAction) {
+        val controller = hotkeys
+        if (controller == null || !controller.isAvailable) {
+            status = "全局快捷键不可用：注册失败，可能被杀毒软件拦了"
+            return
+        }
+        capturingAction = action
+        controller.captureNext { spec ->
+            scope.launch { finishHotkeyCapture(action, spec) }
+        }
+        status = "请按下「${action.label}」要用的键或组合键，Esc 取消"
+    }
+
+    fun cancelHotkeyCapture() {
+        hotkeys?.cancelCapture()
+        if (capturingAction == null) return
+        capturingAction = null
+        status = "已取消快捷键设置"
+    }
+
+    /** 恢复某个动作的默认快捷键。 */
+    fun resetHotkey(action: HotkeyAction) {
+        val spec = when (action) {
+            HotkeyAction.CAPTURE -> HotkeySpec.DEFAULT_CAPTURE
+            HotkeyAction.RECORD -> HotkeySpec.DEFAULT_RECORD
+            HotkeyAction.SELECT -> HotkeySpec.DEFAULT_SELECT
+        }
+        hotkeys?.cancelCapture()
+        capturingAction = null
+        updateSettings { it.withHotkey(action, spec) }
+        status = "「${action.label}」已恢复默认 ${spec.label}"
+    }
+
+    private fun finishHotkeyCapture(action: HotkeyAction, spec: HotkeySpec?) {
+        // Esc 或窗口被关掉时 spec 为 null；也可能期间已经取消了
+        if (capturingAction != action) return
+        capturingAction = null
+        if (spec == null) {
+            status = "已取消快捷键设置"
+            return
+        }
+        val conflict = HotkeyAction.entries
+            .firstOrNull { it != action && settings.hotkeyOf(it) == spec }
+        if (conflict != null) {
+            status = "${spec.label} 已经是「${conflict.label}」的快捷键，换一个吧"
+            return
+        }
+        updateSettings { it.withHotkey(action, spec) }
+        status = if (!spec.ctrl && !spec.alt && !spec.meta && !spec.shift) {
+            "「${action.label}」已设为 ${spec.label}：单键在打字时容易误触，建议加 Ctrl 或 Alt"
+        } else {
+            "「${action.label}」已设为 ${spec.label}"
+        }
     }
 
     // ---------------------------------------------------------------- 其他

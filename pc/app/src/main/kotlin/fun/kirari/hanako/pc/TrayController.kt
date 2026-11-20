@@ -40,8 +40,8 @@ class TrayController(
         icon.addActionListener { onOpenSettings() }
 
         val menu = PopupMenu()
-        menu.add(item("按固定位置截图", onCapture))
-        menu.add(item("录音作答（开始/结束）", onRecord))
+        menu.add(item("多模态识屏（按固定区域截一张）", onCapture))
+        menu.add(item("录音识屏（开始/结束）", onRecord))
         menu.add(item("重新框选区域", onSelect))
         menu.addSeparator()
         menu.add(item("从剪贴板读图", onClipboard))
