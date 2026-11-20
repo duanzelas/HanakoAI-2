@@ -21,7 +21,8 @@ class TrayController(
     private val onSelect: () -> Unit,
     private val onClipboard: () -> Unit,
     private val onOpenSettings: () -> Unit,
-    private val onExit: () -> Unit
+    private val onExit: () -> Unit,
+    private val onRecord: () -> Unit = {}
 ) {
 
     private var trayIcon: TrayIcon? = null
@@ -30,12 +31,13 @@ class TrayController(
     fun install(): Boolean {
         if (!SystemTray.isSupported()) return false
         val tray = SystemTray.getSystemTray()
-        val icon = TrayIcon(render(""), "Hanako PC · 就绪")
+        val icon = TrayIcon(render(""), "HanakoAI-EX PC · 就绪")
         icon.isImageAutoSize = true
         icon.addActionListener { onOpenSettings() }
 
         val menu = PopupMenu()
         menu.add(item("按固定位置截图", onCapture))
+        menu.add(item("录音作答（开始/结束）", onRecord))
         menu.add(item("重新框选区域", onSelect))
         menu.addSeparator()
         menu.add(item("从剪贴板读图", onClipboard))

@@ -10,11 +10,13 @@ import java.util.logging.Logger
  * 全局热键：
  *   Ctrl+Alt+S  按固定区域截图并作答
  *   Ctrl+Alt+R  重新框选区域
+ *   Ctrl+Alt+V  开始/结束录音作答（语音+画面模式）
  * 回调在 JNativeHook 的原生线程上触发，内部只做状态更新与协程投递，不直接碰 UI。
  */
 class HotkeyController(
     private val onCapture: () -> Unit,
-    private val onSelect: () -> Unit
+    private val onSelect: () -> Unit,
+    private val onRecord: () -> Unit = {}
 ) : NativeKeyListener {
 
     private var installed = false
@@ -53,6 +55,7 @@ class HotkeyController(
         when (event.keyCode) {
             NativeKeyEvent.VC_S -> onCapture()
             NativeKeyEvent.VC_R -> onSelect()
+            NativeKeyEvent.VC_V -> onRecord()
         }
     }
 

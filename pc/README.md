@@ -5,27 +5,47 @@
 
 ## 当前状态
 
-可以编译、可以运行，已实现：
+可以编译、可以运行，功能对齐 Android 主线（0.0.28）的核心能力：
 
 - **托盘常驻**：关闭窗口缩到托盘；托盘图标直接画出答案字母（`A` / `AB` / `ABD`），鼠标悬停可看完整答案摘要
-- **全局热键**：`Ctrl+Alt+S` 按固定区域截图作答，`Ctrl+Alt+R` 重新框选
+- **全局热键**：`Ctrl+Alt+S` 截图作答、`Ctrl+Alt+R` 重新框选、`Ctrl+Alt+V` 开始/结束录音
 - **框选一次、位置固定**：选区坐标存进配置，之后每次截图都用同一个矩形，不会再弹框
-- **两条处理链路**：多模态直答（图片直接给视觉模型）、先 OCR 再作答（视觉模型抄文字 → 文本模型解题）
-- **剪贴板取图**：托菜单项或界面按钮，支持剪贴板位图与图片文件
+- **三条处理链路**：多模态直答、先 OCR 再作答、**语音+画面**（录音转写 + 当前截图一起交给模型）
+- **语音转录**：麦克风录 16 kHz 单声道 PCM，超过 110 秒自动切片，转写走 DeepSeek 官方 ASR（`/v1/tools/asr`）；
+  录到静音或转写失败会自动降级成纯截图作答，不会把整次作答废掉
+- **历史记录**：每次作答都落到 `~/.hanako-pc/history.json`，右侧「历史」页可回看、复制、删除、清空
+- **答案版本**：同一张图可以「重新生成」，用 `<` `>` 在多个答案之间翻，不会互相覆盖
+- **联网搜索**：可选 Tavily / Brave / Serper，作答前把题干检索一遍，结果作为参考资料拼进提示词
+- **模型预设**：DeepSeek / OpenAI / Anthropic / Gemini 一键填好 Base URL 与模型名
+- **Markdown 渲染**：标题、列表、代码块、粗体、行内代码；公式原样显示（桌面端不做 LaTeX 排版）
+- **剪贴板取图**：托盘菜单项或界面按钮，支持剪贴板位图与图片文件
 - **答案浮窗**：右下角浮出字母小球，点击复制完整答案，15 秒后自动消失
 - 配置持久化到 `~/.hanako-pc/config.properties`（明文，仅本机）
 - 配置面板底部有「关于」：显示当前版本号，点仓库地址用浏览器打开
   `https://github.com/duanzelas/HanakoAI-EX`
 
-还没做：历史记录、Markdown/LaTeX 渲染、多显示器下按屏幕分别框选。
+还没做：多悬浮窗（桌面端没有系统级悬浮层，只有答案浮窗）、LaTeX 排版渲染、多显示器下按屏幕分别框选。
 
 ## 用法
 
-1. 填好 Base URL / API Key / 视觉模型（多模态或 OCR 能力）与文本模型
-2. 按 `Ctrl+Alt+R`（或点「重新框选」），拖动框住题目区域，松手即固定
-3. 之后按 `Ctrl+Alt+S`，或点托盘菜单「按固定位置截图」，直接出答案
-4. 选择题答案会同时出现在：托盘图标、右下角浮窗、主窗口
-5. 点浮窗即可复制完整答案
+1. 顶部点一个预设（如 **DeepSeek**），或自己填 Base URL / API Key / 视觉模型与文本模型
+2. 选处理方式：`多模态` / `OCR→LLM` / `语音+画面`
+3. 按 `Ctrl+Alt+R`（或点「重新框选」），拖动框住题目区域，松手即固定
+4. 之后按 `Ctrl+Alt+S`（或点托盘菜单「按固定位置截图」）直接出答案
+5. **语音+画面**：按 `Ctrl+Alt+V` 开始录音，再按一次结束 → 转写 → 截当前固定区域 → 一起作答；
+   也可以直接点左侧红色「● 录音作答」按钮
+6. 选择题答案会同时出现在：托盘图标、右下角浮窗、主窗口
+7. 点浮窗即可复制完整答案；右侧「历史」页可回看之前的每一次作答
+
+### 语音设置
+
+| 字段 | 说明 |
+|---|---|
+| 转写地址 | 默认 `https://api.deepseek.com/v1`，路径 `/tools/asr` |
+| 转写 API Key | 留空则复用主 API Key（DeepSeek 的 chat 与 ASR 是同一个 Key） |
+| 录音上限 | 默认 110 秒（ASR 单次 120 秒上限留余量），到点自动结束并作答 |
+
+桌面端只有麦克风一条音源：Java Sound 拿不到 WASAPI loopback，系统内录在 PC 上做不到。
 
 ## 目录结构
 
@@ -35,10 +55,16 @@ pc/
 ├── build.gradle.kts           插件版本集中声明
 ├── llm-core/                  JVM 模块，直接编译 ../../kirari-llm-core 的源码
 └── app/src/main/kotlin/fun/kirari/hanako/pc/
-    ├── Main.kt                入口、主窗口、答案浮窗
+    ├── Main.kt                入口、主窗口（配置 / 结果 / 历史）、答案浮窗
     ├── AppState.kt            状态与动作（托盘/热键/界面共用同一套）
-    ├── PcSettings.kt          配置模型与持久化（含固定选区）
-    ├── Solver.kt              两条处理链路，复用 kirari-llm-core
+    ├── PcSettings.kt          配置模型与持久化（预设、三模式、转写、搜索）
+    ├── Solver.kt              三条处理链路 + 搜索上下文注入，复用 kirari-llm-core
+    ├── PcAudio.kt             麦克风录音（javax.sound）与 PCM→WAV 封装
+    ├── PcTranscriber.kt       转写，复用 llm-core 的 TranscriptionClient
+    ├── PcSearch.kt            Tavily / Brave / Serper 搜索
+    ├── PcHistory.kt           历史记录（JSON 文件读写）
+    ├── MarkdownText.kt        轻量 Markdown 渲染（无第三方依赖）
+    ├── PcInfo.kt              版本号与仓库地址
     ├── AnswerParser.kt        从回答里抽 A-H 选项字母
     ├── Capture.kt             Robot 截图 / 剪贴板取图 / JPEG 编码
     ├── RegionSelector.kt      全屏框选遮罩（AWT，像素坐标严格对齐）
@@ -70,7 +96,7 @@ AWT `JWindow` 直接铺在 `screenBounds` 上，鼠标坐标加屏幕原点就�
 ```bash
 cd pc
 ./gradlew :app:run                      # 启动
-./gradlew :app:run --args="--smoke"     # 无界面自检：JVM、解析器、热键注册、托盘挂载
+./gradlew :app:run --args="--smoke"     # 无界面自检：版本、预设、路由、解析器、麦克风、热键、托盘
 ```
 
 首次运行会下载 Compose Desktop 与 skiko（约 200MB），之后走本地缓存。
@@ -88,7 +114,7 @@ cd pc
 | 路径 | 大小 | 说明 |
 |---|---|---|
 | `app/build/compose/binaries/main/app/HanakoAI-EX/HanakoAI-EX.exe` | 整目录 115MB | 双击即用，内含精简 JRE，目标机不用装 Java |
-| `app/build/compose/binaries/main/msi/HanakoAI-EX-0.0.28.msi` | 58MB | 安装包，装完有开始菜单项 |
+| `app/build/compose/binaries/main/msi/HanakoAI-EX-0.0.29.msi` | 58MB | 安装包，装完有开始菜单项 |
 
 版本号在两处，必须一起改：`PcInfo.VERSION`（窗口标题与「关于」显示）和
 `pc/app/build.gradle.kts` 的 `packageVersion`（安装包版本）。
