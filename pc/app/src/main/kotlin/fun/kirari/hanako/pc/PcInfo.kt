@@ -13,7 +13,7 @@ import java.net.URI
  * 这里的 [VERSION] 与 `pc/app/build.gradle.kts` 的 `packageVersion`。
  */
 internal object PcInfo {
-    const val VERSION = "0.0.31"
+    const val VERSION = "0.0.32"
     const val APP_NAME = "HanakoAI-EX PC"
 
     /** 与 Android 端「设置 → 更多 → GitHub 仓库」指向同一个仓库。 */

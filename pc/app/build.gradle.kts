@@ -18,6 +18,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
     // 全局热键（Compose Desktop 没有内置的全局快捷键）
     implementation("com.github.kwhat:jnativehook:2.2.2")
+    // 防录屏/截屏：SetWindowDisplayAffinity 是 Win32 API，需要 JNA 拿窗口句柄并调用
+    implementation("net.java.dev.jna:jna:5.14.0")
+    implementation("net.java.dev.jna:jna-platform:5.14.0")
 }
 
 compose.desktop {
@@ -34,7 +37,7 @@ compose.desktop {
             }
             targetFormats(*formats)
             packageName = "HanakoAI-EX"
-            packageVersion = "0.0.31"
+            packageVersion = "0.0.32"
             // jpackage 在中文 Windows 上会用系统 GBK 解码这些字段，
             // 非 ASCII 会抛 MalformedInputException("Input length = 1")，这里必须纯英文。
             description = "HanakoAI-EX PC - desktop AI assistant (preview)"

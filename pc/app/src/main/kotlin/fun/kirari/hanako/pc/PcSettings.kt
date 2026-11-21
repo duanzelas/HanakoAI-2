@@ -127,6 +127,15 @@ data class PcSettings(
     /** 重新框选区域。 */
     val hotkeySelect: HotkeySpec = HotkeySpec.DEFAULT_SELECT,
 
+    // ---- 隐私 ----
+    /**
+     * 防录屏 / 防截屏，默认开启。
+     *
+     * 开启后本程序的窗口（主窗、设置、答案浮窗）在系统级捕获里不可见，
+     * 自己截图也看不到——同一个机制的两面，临时需要截图时到设置里关掉。
+     */
+    val screenProtectionEnabled: Boolean = true,
+
     // ---- 历史 ----
     val historyLimit: Int = 200
 ) {
@@ -187,6 +196,7 @@ data class PcSettings(
             props["hotkey.capture"] = hotkeyCapture.encode()
             props["hotkey.record"] = hotkeyRecord.encode()
             props["hotkey.select"] = hotkeySelect.encode()
+            props["screenProtectionEnabled"] = screenProtectionEnabled.toString()
             region?.let {
                 props["region.x"] = it.x.toString()
                 props["region.y"] = it.y.toString()
@@ -248,7 +258,9 @@ data class PcSettings(
                 hotkeyRecord = HotkeySpec.decode(props.getProperty("hotkey.record"))
                     ?: HotkeySpec.DEFAULT_RECORD,
                 hotkeySelect = HotkeySpec.decode(props.getProperty("hotkey.select"))
-                    ?: HotkeySpec.DEFAULT_SELECT
+                    ?: HotkeySpec.DEFAULT_SELECT,
+                screenProtectionEnabled = props.getProperty("screenProtectionEnabled")
+                    ?.toBooleanStrictOrNull() ?: true
             )
         }.getOrDefault(PcSettings())
 

@@ -69,6 +69,9 @@ class AppState(private val scope: CoroutineScope) {
     var capturingAction by mutableStateOf<HotkeyAction?>(null)
         private set
 
+    /** 主窗口的防录屏实际状态，供界面回显；null 表示还没应用过。 */
+    var screenGuard by mutableStateOf<ScreenShield.Result?>(null)
+
     private val solver = Solver()
     private val recorder = PcRecorder()
     private val transcriber = PcTranscriber()

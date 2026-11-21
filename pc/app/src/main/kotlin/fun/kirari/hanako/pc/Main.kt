@@ -24,6 +24,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -70,6 +71,7 @@ fun main(args: Array<String>) {
             "keys     = " + HotkeyAction.entries.joinToString { "${it.label}:${PcSettings().hotkeyOf(it).label}" }
         )
         println("search   = ${SearchKind.entries.joinToString { it.label }}")
+        println("shield   = ${if (ScreenShield.isWindows) "Windows（支持防录屏）" else "非 Windows，防录屏不可用"}")
         println("parser   = '答案：ABD' -> ${AnswerParser.lettersOf("答案：ABD")}")
         println("parser   = '选 B'     -> ${AnswerParser.lettersOf("选 B")}")
         println("parser   = '今天天气' -> '${AnswerParser.lettersOf("今天天气不错")}'")
@@ -161,6 +163,36 @@ fun main(args: Array<String>) {
     }
 }
 
+// ---------------------------------------------------------------- 防录屏
+
+/** 三个窗口的标题。防录屏要按标题找 HWND，所以标题必须集中定义、只此一份。 */
+private val MAIN_WINDOW_TITLE = "${PcInfo.APP_NAME} ${PcInfo.VERSION}（预览）"
+private val SETTINGS_WINDOW_TITLE = "设置 · ${PcInfo.APP_NAME}"
+private const val BUBBLE_WINDOW_TITLE = "HanakoAI-EX"
+
+/**
+ * 把当前窗口标记成「不参与截屏/录屏」。
+ *
+ * 按标题去 Win32 里找自己的 HWND —— Compose Desktop 不暴露句柄，而三个窗口标题
+ * 都是本进程内唯一的常量，配合 pid 校验足够可靠，也不用反射 JDK 内部字段。
+ *
+ * key 里带上 visible：窗口隐藏再显示会重建 HWND，需要重新打一次标记。
+ */
+@Composable
+private fun ApplyScreenGuard(
+    state: AppState,
+    title: String,
+    visible: Boolean,
+    report: Boolean = false
+) {
+    val enabled = state.settings.screenProtectionEnabled
+    LaunchedEffect(enabled, visible) {
+        if (!visible) return@LaunchedEffect
+        val result = ScreenShield.apply(title, enabled)
+        if (report) state.screenGuard = result
+    }
+}
+
 // ---------------------------------------------------------------- 主窗口
 
 @Composable
@@ -171,9 +203,10 @@ private fun MainWindow(state: AppState, onExit: () -> Unit) {
             if (state.tray?.isAvailable == true) state.showMain = false else onExit()
         },
         visible = state.showMain,
-        title = "${PcInfo.APP_NAME} ${PcInfo.VERSION}（预览）",
+        title = MAIN_WINDOW_TITLE,
         state = rememberWindowState(width = 1020.dp, height = 720.dp)
     ) {
+        ApplyScreenGuard(state, MAIN_WINDOW_TITLE, visible = state.showMain, report = true)
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
                 Column(modifier = Modifier.fillMaxSize()) {
@@ -271,16 +304,37 @@ private fun OperationPane(state: AppState) {
     ) {
         Text("操作", style = MaterialTheme.typography.titleSmall)
 
+        // 第一个按钮固定「多模态识屏」：截一张固定区域直接问模型，不看当前处理方式
         Button(
-            onClick = { state.captureNow() },
+            onClick = { state.captureMultimodal() },
             enabled = !state.busy && !state.recording,
             modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                if (settings.route == SolveRoute.AUDIO_AND_SCREEN) "按固定区域录音作答"
-                else "按固定区域截图作答"
-            )
+        ) { Text("多模态识屏（截一张）") }
+
+        // 第二个按钮固定「录音识屏」：按一下开始录、再按一下结束并作答
+        if (state.recording) {
+            Button(
+                onClick = { state.finishRecording() },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error
+                )
+            ) { Text("■ 结束并识别 " + formatSeconds(state.recordSeconds)) }
+        } else {
+            FilledTonalButton(
+                onClick = { state.toggleRecording() },
+                enabled = !state.busy,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("录音识屏（开始录音）") }
         }
+
+        Text(
+            text = "多模态：截固定区域直接作答；录音：录${options.label}后结合截图作答。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(Modifier.height(2.dp))
         OutlinedButton(
             onClick = { state.startSelect() },
             enabled = !state.busy && !state.recording,
@@ -298,6 +352,7 @@ private fun OperationPane(state: AppState) {
         InfoRow("处理方式", settings.route.label)
         InfoRow("模型", settings.visionModel.ifBlank { "未配置" })
         InfoRow("录音音源", options.label)
+        InfoRow("防录屏", if (settings.screenProtectionEnabled) "已开启" else "已关闭")
         if (!options.any) {
             Text(
                 text = "两个音源都关着：到 设置 → 语音与录音 打开系统内录或麦克风",
@@ -316,6 +371,13 @@ private fun OperationPane(state: AppState) {
                 text = "可用设备：" + systemDevices.joinToString(),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (settings.screenProtectionEnabled && state.screenGuard?.isProtected == false) {
+            Text(
+                text = "防录屏未生效：" + (state.screenGuard?.label ?: ""),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
             )
         }
 
@@ -399,7 +461,7 @@ private fun SettingsWindow(state: AppState) {
             state.showSettings = false
         },
         visible = state.showSettings,
-        title = "设置 · ${PcInfo.APP_NAME}",
+        title = SETTINGS_WINDOW_TITLE,
         state = rememberWindowState(width = 560.dp, height = 780.dp)
     ) {
         // 设置窗和主窗都默认居中，直接弹出来会被主窗整个盖住（看起来像「点了没反应」），
@@ -412,6 +474,7 @@ private fun SettingsWindow(state: AppState) {
                 }
             }
         }
+        ApplyScreenGuard(state, SETTINGS_WINDOW_TITLE, visible = state.showSettings)
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
                 Column(
@@ -436,6 +499,8 @@ private fun SettingsWindow(state: AppState) {
                     HotkeySection(state)
                     SectionDivider()
                     VoiceSection(state)
+                    SectionDivider()
+                    PrivacySection(state)
                     SectionDivider()
                     SearchSection(state)
                     SectionDivider()
@@ -696,6 +761,51 @@ private fun VoiceSection(state: AppState) {
 }
 
 @Composable
+private fun PrivacySection(state: AppState) {
+    val settings = state.settings
+    val enabled = settings.screenProtectionEnabled
+
+    Text("隐私", style = MaterialTheme.typography.titleSmall)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Switch(
+            checked = enabled,
+            onCheckedChange = { value ->
+                state.updateSettings { it.copy(screenProtectionEnabled = value) }
+            }
+        )
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text("防止本程序被录屏 / 截屏", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "开启后主窗、设置窗口、答案浮窗在系统级捕获里都不可见。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+    Text(
+        text = if (!enabled) {
+            "已关闭：本程序窗口会正常出现在截屏与录屏里"
+        } else {
+            state.screenGuard?.label ?: "窗口显示后生效"
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = when {
+            !enabled -> MaterialTheme.colorScheme.onSurfaceVariant
+            state.screenGuard?.isProtected == true -> MaterialTheme.colorScheme.primary
+            state.screenGuard == null -> MaterialTheme.colorScheme.onSurfaceVariant
+            else -> MaterialTheme.colorScheme.error
+        }
+    )
+    Text(
+        text = "仅 Windows 10 2004 及以上有效；手机拍屏、采集卡这类物理截取防不住。" +
+            "开启后你自己截图也看不到本程序窗口，需要截图时先关掉它。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+@Composable
 private fun SearchSection(state: AppState) {
     val settings = state.settings
     var engineExpanded by remember { mutableStateOf(false) }
@@ -763,7 +873,7 @@ private fun BubbleWindow(state: AppState) {
     Window(
         onCloseRequest = { state.bubbleVisible = false },
         visible = state.bubbleVisible,
-        title = "HanakoAI-EX",
+        title = BUBBLE_WINDOW_TITLE,
         state = rememberWindowState(
             position = WindowPosition(Alignment.BottomEnd),
             size = DpSize(240.dp, 116.dp)
@@ -773,6 +883,7 @@ private fun BubbleWindow(state: AppState) {
         resizable = false,
         alwaysOnTop = true
     ) {
+        ApplyScreenGuard(state, BUBBLE_WINDOW_TITLE, visible = state.bubbleVisible)
         MaterialTheme {
             Box(modifier = Modifier.fillMaxSize().padding(10.dp)) {
                 Column(
